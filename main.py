@@ -18,4 +18,16 @@ for patient_folder in patient_folders:
         mat_contents = sio.loadmat(eeg_file)
         
         eeg_data = mat_contents['trial_eeg']
-        print(eeg_data.shape)
+
+        eeg_tensor, _ = wavelet_transform(eeg_data, bandwidth=[1, 100], fs=250, num_samples=50, norm_out = True, abs_out=True)
+
+        spatial_eeg_tensor = reshape_to_spatial(eeg_tensor)
+
+        segmented_eeg_tensor = segment_eeg_data(spatial_eeg_tensor, window=250, overlap=200, axis=-1)
+
+        # save each segment of the segmented tensor
+        for segment_idx in range(segmented_eeg_tensor.shape[0]):
+            segment = segmented_eeg_tensor[segment_idx]
+            save_path = os.path.join(patient_folder, f"segmented_tensor_segment{segment_idx+1}.npy")
+            np.save(save_path, segment)
+        break
