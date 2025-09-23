@@ -60,18 +60,20 @@ def reshape_to_spatial(eeg_data: np.ndarray, nan: str = "0") -> np.ndarray:
     return reshaped_data
 
 
-def segment_eeg_data(eeg_data: np.ndarray, window: int = 0, overlap: float = 0, axis: int = -1, track_indices: bool = False) -> Union[np.ndarray, Tuple[np.ndarray, List]]:
+def segment_data(eeg_data: np.ndarray, sensor_data: np.ndarray = None, window: int = 0, overlap: float = 0, axis: int = -1, segment_sensor_signal: bool = False) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
     """
     Batch EEG data into smaller segments for processing.
     Allows for overlapping and windowed using input parameters.
     Parameters:
     - eeg_data: numpy array
+    - sensor_data: numpy array
     - window: Integer specifying the window size for each segment
     - overlap: Integer specifying the overlap between segments
     - axis: Axis along which to batch the data
-    - track_indices: Boolean flag to indicate whether to track segment indices
+    - segment_sensor_signal: True if there's an additional sensor signal which has to be in synch with the eeg data
     Returns:
     - batched_data: array of segmented EEG data with shape (num_segments, ...)
+    - tuple if sensor data is segmented 
     """
 
     step = window - overlap
@@ -79,15 +81,19 @@ def segment_eeg_data(eeg_data: np.ndarray, window: int = 0, overlap: float = 0, 
         raise ValueError("Detected negative step value, ensure that window > overlap.")
     
     total_length = eeg_data.shape[axis]
-    segments = []
+    eeg_segments = []
+    sensor_segments = []
     for start in range(0, total_length - window + 1, step):
         end = start + window
         slices = [slice(None)] * eeg_data.ndim
         slices[axis] = slice(start, end)
-        segments.append(eeg_data[tuple(slices)])
+        eeg_segments.append(eeg_data[tuple(slices)])
 
-    if track_indices:
-        indices = [(start, start + window) for start in range(0, total_length - window + 1, step)]
-        return np.stack(segments, axis=0), indices
+        if segment_sensor_signal and sensor_data.size > 0:
+            slices = [slice(None)] * sensor_data.ndim
+            slices[axis] = slice(start, end)
+            sensor_segments.append(sensor_data[tuple(slices)])
+    if segment_sensor_signal and sensor_data.size > 0:    
+        return np.stack(eeg_segments, axis=0), np.stack(sensor_segments, axis=0)
     else:
-        return np.stack(segments, axis=0)
+        return np.stack(eeg_segments, axis=0)
