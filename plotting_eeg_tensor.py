@@ -23,7 +23,7 @@ for i, file in enumerate(selected_files):
     mat = sio.loadmat(file, squeeze_me=True, struct_as_record=False)
     eeg = np.array(mat["trial_eeg"])
 
-eeg_tensor, _ = wavelet_transform(eeg, bandwidth=[0.5, 100], fs=250, num_samples=50, norm_out = True)
+eeg_tensor, _ = wavelet_transform(eeg, bandwidth=[1, 100], fs=250, num_samples=50, norm_out = True)
 
 spatial_eeg_tensor = reshape_to_spatial(eeg_tensor)
 

@@ -65,7 +65,7 @@ def segment_eeg_data(eeg_data: np.ndarray, window: int = 0, overlap: float = 0, 
     Batch EEG data into smaller segments for processing.
     Allows for overlapping and windowed using input parameters.
     Parameters:
-    - eeg_data: numpy array\
+    - eeg_data: numpy array
     - window: Integer specifying the window size for each segment
     - overlap: Integer specifying the overlap between segments
     - axis: Axis along which to batch the data
