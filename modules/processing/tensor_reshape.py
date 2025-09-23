@@ -1,4 +1,5 @@
 import numpy as np
+from typing import Tuple, List, Union
 
 SPATIAL_DOMAIN_MATRIX = np.array([
             [None, 'Fp1', None, 'Fp2', None],
@@ -59,7 +60,7 @@ def reshape_to_spatial(eeg_data: np.ndarray, nan: str = "0") -> np.ndarray:
     return reshaped_data
 
 
-def segment_eeg_data(eeg_data: np.ndarray, window: int = 0, overlap: float = 0, axis: int = -1):
+def segment_eeg_data(eeg_data: np.ndarray, window: int = 0, overlap: float = 0, axis: int = -1, track_indices: bool = False) -> Union[np.ndarray, Tuple[np.ndarray, List]]:
     """
     Batch EEG data into smaller segments for processing.
     Allows for overlapping and windowed using input parameters.
@@ -68,6 +69,7 @@ def segment_eeg_data(eeg_data: np.ndarray, window: int = 0, overlap: float = 0, 
     - window: Integer specifying the window size for each segment
     - overlap: Integer specifying the overlap between segments
     - axis: Axis along which to batch the data
+    - track_indices: Boolean flag to indicate whether to track segment indices
     Returns:
     - batched_data: array of segmented EEG data with shape (num_segments, ...)
     """
@@ -83,4 +85,9 @@ def segment_eeg_data(eeg_data: np.ndarray, window: int = 0, overlap: float = 0, 
         slices = [slice(None)] * eeg_data.ndim
         slices[axis] = slice(start, end)
         segments.append(eeg_data[tuple(slices)])
-    return np.stack(segments, axis=0)
+
+    if track_indices:
+        indices = [(start, start + window) for start in range(0, total_length - window + 1, step)]
+        return np.stack(segments, axis=0), indices
+    else:
+        return np.stack(segments, axis=0)
