@@ -54,20 +54,35 @@ class SignalObject:
             self.trial = trial_number
             
         if file_name is not None:
+
             patient_match = re.search(r'patient(\d+)', file_name, re.IGNORECASE)
             trial_match = re.search(r'trial(\d+)', file_name, re.IGNORECASE)
+            
+            self.patient = self._regex_patient(file_name)
+            self.trial = self._regex_trial(file_name)
 
-            if patient_match:
-                self.patient = int(patient_match.group(1))
-            if trial_match:
-                self.trial = int(trial_match.group(1))
-        
         if not hasattr(self, 'patient'):
             logging.warning("Patient number not provided and could not be inferred from file name.")
             self.patient = None
         if not hasattr(self, 'trial'):
             logging.warning("Trial number not provided and could not be inferred from file name.")
             self.trial = None
+
+    def _regex_patient(self, file_name: str) -> Union[int, None]:
+        patterns = [r'patient(\d+)', r'p(\d+)']
+        for pattern in patterns:
+            match = re.search(pattern, file_name, re.IGNORECASE)
+            if match:
+                return int(match.group(1))
+        return None
+    
+    def _regex_trial(self, file_name: str) -> Union[int, None]:
+        patterns = [r'trial(\d+)', r't(\d+)']
+        for pattern in patterns:
+            match = re.search(pattern, file_name, re.IGNORECASE)
+            if match:
+                return int(match.group(1))
+        return None     
     
     def _validate_dim_dict_dimensions(self, dim_dict: Dict):
         """
@@ -79,11 +94,6 @@ class SignalObject:
 
         if len(dim_dict.keys()) != self.signal.ndim:
             raise ValueError(f"Dimension dictionary length ({len(dim_dict.keys())}) does not match signal dimensions ({self.signal.ndim}).")
-
-        possible_keys = {key.value for key in self.DIM_DICT_KEYS}
-        for key in dim_dict.keys():
-            if key not in possible_keys:
-                raise ValueError(f"Invalid dimension key: {key}. Must be one of {possible_keys}.")
             
         if len(set(dim_dict.values())) != len(dim_dict.values()):
             raise ValueError("Dimension indices must be unique.")
@@ -106,7 +116,8 @@ class SignalObject:
     def _edit_dim_dict(self, new_dim_dict: Dict[str, int]):
         self._validate_dim_dict_dimensions(new_dim_dict)
         self._apply_dim_dict()
-    
+
+
     def _validate_dim_dict(self):
         pass
 
@@ -117,7 +128,7 @@ class SignalObject:
 
 
 class EegSignal(SignalObject):
-    def __init__(self, fs: int, electrode_schema: np.ndarray = None, *args, **kwargs):
+    def __init__(self, electrode_schema: np.ndarray = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
         self.electrode_schema = electrode_schema
@@ -126,7 +137,7 @@ class EegSignal(SignalObject):
 
         self._apply_dim_dict()
 
-        if electrode_schema.size > 0:
+        if isinstance(electrode_schema, np.ndarray) and electrode_schema is not None:
             self._validate_electrode_schema()
             self._infer_spatial_info()
         
@@ -137,6 +148,12 @@ class EegSignal(SignalObject):
         cols_attr = self.DIM_DICT_KEYS.COLS.value
         chan_attr = self.DIM_DICT_KEYS.CHANNELS.value
         # dim dict should contain either (rows and cols) or channels
+
+        possible_keys = {key.value for key in self.DIM_DICT_KEYS.__members__.values()}
+        for key in self.dim_dict.keys():
+            if key not in possible_keys:
+                raise ValueError(f"Invalid dimension key: {key}. Must be one of {possible_keys}.")
+            
         if (rows_attr in self.dim_dict and cols_attr in self.dim_dict) and not chan_attr in self.dim_dict:
             self.is_spatial_signal = True
         elif chan_attr in self.dim_dict and not (rows_attr in self.dim_dict or cols_attr in self.dim_dict):
@@ -148,7 +165,7 @@ class EegSignal(SignalObject):
     def _validate_electrode_schema(self):
         rows_attr = self.DIM_DICT_KEYS.ROWS.value
         cols_attr = self.DIM_DICT_KEYS.COLS.value
-
+        
         if self.is_spatial_signal:
             if self.electrode_schema.ndim != 2:
                 raise ValueError("Electrode schema of a spatial signal must be a 2D array.")

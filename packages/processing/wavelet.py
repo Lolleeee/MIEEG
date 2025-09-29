@@ -3,7 +3,7 @@ import pywt
 from typing import List, Tuple, Union
 from functools import lru_cache
 
-from packages.data_objects.signal import GLOBAL_DIM_KEYS, EegSignal
+from packages.data_objects.signal import GLOBAL_DIM_KEYS, SignalObject, EegSignal
 
 def raw_wavelet_transform(signal: np.ndarray, wavelet: str = 'cmor1.5-1.0', bandwidth: Tuple[float] = None, fs: float = None, num_samples: int = None, abs_out: bool = True, norm_out: bool = True) -> tuple[np.ndarray, np.ndarray]:
     """
@@ -78,7 +78,7 @@ def raw_wavelet_transform(signal: np.ndarray, wavelet: str = 'cmor1.5-1.0', band
     
 
 
-def eeg_wavelet_transform(EegSignal: EegSignal, bandwidth: Tuple[float, float], wavelet: str = 'cmor1.5-1.0', freq_samples: int = None, abs_out: bool = True, norm_out: bool = True) -> tuple[np.ndarray, np.ndarray]:
+def eeg_wavelet_transform(Signal: SignalObject, bandwidth: Tuple[float, float], wavelet: str = 'cmor1.5-1.0', freq_samples: int = None) -> tuple[np.ndarray, np.ndarray]:
     """
     Perform Continuous Wavelet Transform (CWT) on the input EegSignal using the specified wavelet.
     Parameters:
@@ -94,88 +94,99 @@ def eeg_wavelet_transform(EegSignal: EegSignal, bandwidth: Tuple[float, float], 
         than the second, the signal is transposed.
     """
 
-    _validate_eeg_signal(EegSignal)
+    _validate_signal(Signal)
 
-    fs = EegSignal.fs
-    signal = EegSignal.signal
+    fs = Signal.fs
+    signal = Signal.signal
 
-    _validate_bandwidth(bandwidth)
+    bandwidth_min, bandwidth_max = _validate_bandwidth(bandwidth)
     
     # Using 1 Hz resolution by default
     if freq_samples is None:
-        freq_samples = bandwidth[1] - bandwidth[0] + 1
+        freq_samples = bandwidth_max - bandwidth_min + 1
 
-    scales = _compute_scales(wavelet, fs, bandwidth, freq_samples)
+
+    scales = _compute_scales(wavelet, fs, bandwidth_min, bandwidth_max, freq_samples)
 
 
 
     # Spatial Multichannel case
-    if EegSignal.is_spatial_signal:
+    if Signal.is_spatial_signal:
         
-        rows_key = EegSignal.DIM_DICT_KEYS.ROWS.value
-        cols_key = EegSignal.DIM_DICT_KEYS.COLS.value
-        time_key = EegSignal.DIM_DICT_KEYS.TIME.value
-        freq_key = EegSignal.DIM_DICT_KEYS.FREQUENCIES.value
+        rows_key = Signal.DIM_DICT_KEYS.ROWS.value
+        cols_key = Signal.DIM_DICT_KEYS.COLS.value
+        time_key = Signal.DIM_DICT_KEYS.TIME.value
+        freq_key = Signal.DIM_DICT_KEYS.FREQUENCIES.value
 
-        time_dim = EegSignal.dim_dict.get(time_key, None)
+        time_dim = Signal.dim_dict.get(time_key, None)
 
-        rows_dim, cols_dim = EegSignal.dim_dict.get(rows_key, None), EegSignal.dim_dict.get(cols_key, None)
+        rows_dim, cols_dim = Signal.dim_dict.get(rows_key, None), Signal.dim_dict.get(cols_key, None)
 
-        num_rows, num_cols, num_times = EegSignal.rows, EegSignal.cols, EegSignal.time
+        num_rows, num_cols, num_times = Signal.rows, Signal.cols, Signal.time
 
         all_coeffs, freqs = _spatial_wavelet(signal, scales, wavelet, num_rows, num_cols, num_times, time_dim, rows_dim, cols_dim)
 
         # Update EegSignal attributes
-        EegSignal._edit_dim_dict({rows_key: 0, cols_key: 1, freq_key: 2, time_key: 3})
-        EegSignal.signal = all_coeffs
-        EegSignal.wavelet_frequencies = freqs
+        Signal.signal = all_coeffs
+
+        Signal._edit_dim_dict({rows_key: 0, cols_key: 1, freq_key: 2, time_key: 3})
+        
+        Signal.wavelet_frequencies = freqs
 
     # Non spatial case
-    elif not EegSignal.is_spatial_signal:
-        chan_key = EegSignal.DIM_DICT_KEYS.CHANNELS.value
-        time_key = EegSignal.DIM_DICT_KEYS.TIME.value
-        freq_key = EegSignal.DIM_DICT_KEYS.FREQUENCIES.value
+    elif not Signal.is_spatial_signal:
+        chan_key = Signal.DIM_DICT_KEYS.CHANNELS.value
+        time_key = Signal.DIM_DICT_KEYS.TIME.value
+        freq_key = Signal.DIM_DICT_KEYS.FREQUENCIES.value
 
-        time_dim = EegSignal.dim_dict.get(time_key, None)
-        chan_dim = EegSignal.dim_dict.get(chan_key, None)
+        time_dim = Signal.dim_dict.get(time_key, None)
+        chan_dim = Signal.dim_dict.get(chan_key, None)
 
-        num_chans, num_times = EegSignal.channels, EegSignal.time
-        
-        all_coeffs, freqs = _channelwise_wavelet(signal, scales, wavelet)
+        num_chans, num_times = Signal.channels, Signal.time
+
+        all_coeffs, freqs = _channelwise_wavelet(signal, scales, wavelet, chan_dim, time_dim, num_chans, num_times)
 
         # Update EegSignal attributes
-        EegSignal._edit_dim_dict({chan_key: 0, freq_key: 1, time_key: 2})
-        EegSignal.signal = all_coeffs
-        EegSignal.wavelet_frequencies = freqs
+        Signal.signal = all_coeffs
+
+        Signal._edit_dim_dict({chan_key: 0, freq_key: 1, time_key: 2})
+        
+        Signal.wavelet_frequencies = freqs
     
-    return EegSignal
+    return Signal
 
 # MARK: Validation
-def _validate_bandwidth(bandwidth: Union[List[float], Tuple[float, float]]) -> None:
+def _validate_bandwidth(bandwidth: Union[List[float], Tuple[float, float]]) -> Tuple[float, float]:
     if not isinstance(bandwidth, (list, tuple)) or len(bandwidth) != 2:
         raise ValueError("Bandwidth must be a list or tuple with two elements: [min_freq, max_freq].")
     if bandwidth[0] <= 0 or bandwidth[1] <= 0 or bandwidth[0] >= bandwidth[1]:
         raise ValueError("Bandwidth values must be positive and min_freq must be less than max_freq.")
+    
+    bandwidth_min, bandwidth_max = bandwidth[0], bandwidth[1] 
+    return bandwidth_min, bandwidth_max
 
-def _validate_eeg_signal(EegSignal: EegSignal) -> None:
+
+
+def _validate_signal(Signal: SignalObject) -> None:
     """
     Validate that the input is an instance of EegSignal.
     Dim_dict must contain TIME key but not FREQUENCY key.
 
     Waveletable signals pass this validation.
     """
-    if not isinstance(EegSignal, EegSignal):
-        raise ValueError("Input must be an instance of EegSignal.")
-    if EegSignal.DIM_DICT_KEYS.TIME.value not in EegSignal.dim_dict:
-        raise ValueError("EegSignal.dim_dict must contain TIME key.")
-    if EegSignal.DIM_DICT_KEYS.FREQUENCIES.value in EegSignal.dim_dict:
-        raise ValueError("EegSignal.dim_dict must not contain FREQUENCY key.")
+    if not isinstance(Signal, SignalObject):
+        raise ValueError("Input must be an instance of SignalObject.")
+    if Signal.DIM_DICT_KEYS.TIME.value not in Signal.dim_dict:
+        raise ValueError("SignalObject.dim_dict must contain TIME key.")
+    if Signal.DIM_DICT_KEYS.FREQUENCIES.value in Signal.dim_dict:
+        raise ValueError("SignalObject.dim_dict must not contain FREQUENCY key.")
+        
 
 
 # MARK: Helper Functions
 @lru_cache(maxsize=4)
-def _compute_scales(wavelet, fs, bandwidth_tuple, num_samples):
-    frequencies = np.linspace(bandwidth_tuple[0], bandwidth_tuple[1], num=num_samples)
+def _compute_scales(wavelet, fs, bandwidth_min, bandwidth_max, num_samples):
+    frequencies = np.linspace(bandwidth_min, bandwidth_max, num=num_samples)
     return pywt.frequency2scale(wavelet, frequencies/fs)
 
 def _spatial_wavelet(all_coeffs, signal, scales, wavelet, num_rows, num_cols, num_times, time_dim, rows_dim, cols_dim):
@@ -194,7 +205,7 @@ def _spatial_wavelet(all_coeffs, signal, scales, wavelet, num_rows, num_cols, nu
     Returns:
     - all_coeffs: 4D numpy array (rows x cols x frequencies x times) of wavelet coefficients.
     """
-    all_coeffs = np.zeros((num_rows, num_cols, scales, num_times), dtype=complex)
+    all_coeffs = np.zeros((num_rows, num_cols, len(scales), num_times), dtype=complex)
 
     for i in range(num_rows):
         for j in range(num_cols):
@@ -208,17 +219,21 @@ def _spatial_wavelet(all_coeffs, signal, scales, wavelet, num_rows, num_cols, nu
             all_coeffs[i, j, :, :] = coeffs
     return all_coeffs, freqs
 
-def _channelwise_wavelet(signal, scales, wavelet):
+def _channelwise_wavelet(signal, scales, wavelet, chan_dim, time_dim, num_chans, num_times):
     """
     Apply wavelet transform to each channel in the signal.
     Parameters:
     - signal: 2D numpy array representing the multichannel signal
     - scales: 1D numpy array of scales for the wavelet transform.
     - wavelet: String specifying the wavelet to use.
+    - chan_dim: Dimension index for channels in the signal array.
+    - time_dim: Dimension index for time in the signal array.
+    - num_chans: Number of channels in the signal.
+    - num_times: Number of time points in the signal.
     Returns:
     - all_coeffs: 3D numpy array (channels x frequencies x times) of wavelet coefficients.
     """
-    all_coeffs = np.zeros((num_chans, scales, num_times), dtype=complex)
+    all_coeffs = np.zeros((num_chans, len(scales), num_times), dtype=complex)
     for i in range(num_chans):
         signal_slice = [slice(None)] * signal.ndim
         signal_slice[chan_dim] = i
