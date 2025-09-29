@@ -14,6 +14,10 @@ logger.addHandler(file_handler)
 logger.propagate = False
 
 
+class GLOBAL_DIM_KEYS(Enum):
+    TIME = 'time'
+    EPOCHS = 'epochs'
+
 
 """
 Class used to create a object of a signal in which data and metadata are stored.
@@ -109,7 +113,7 @@ class EegSignal(SignalObject):
         self.fs = fs
         self.is_spatial_signal: bool = None
         self.seconds_length: float = None
-        
+
         self._apply_dim_dict()
 
         if electrode_schema.size > 0:
@@ -178,10 +182,11 @@ class EegSignal(SignalObject):
     class DIM_DICT_KEYS(Enum):
         ROWS = 'rows'
         COLS = 'cols'
-        FREQUENCIES = 'frequencies'
-        TIME = 'time'
-        EPOCHS = 'epochs'
         CHANNELS = 'channels'
+        FREQUENCIES = 'frequencies'
+        TIME = GLOBAL_DIM_KEYS.TIME.value
+        EPOCHS = GLOBAL_DIM_KEYS.EPOCHS.value
+        
 
         
 class KinematicSignal(SignalObject):
@@ -207,7 +212,18 @@ class KinematicSignal(SignalObject):
 
 
 
+"""
+This class combines multiple eterogenic time series of instances of SignalObject.
+Handles the synchronization of all the time series when preprocessed.
+"""
 
 class MultimodalSignal():
     def __init__(self, signals: List[SignalObject]):
+
+
+        self.signal_array = np.array(signals)
+
+        self.num_signals = self.signal_array.shape[0]
+    def _validate_signals_list(self):
         
+
