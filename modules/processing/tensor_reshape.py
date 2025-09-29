@@ -97,3 +97,7 @@ def segment_data(eeg_data: np.ndarray, sensor_data: np.ndarray = None, window: i
         return np.stack(eeg_segments, axis=0), np.stack(sensor_segments, axis=0)
     else:
         return np.stack(eeg_segments, axis=0)
+    
+
+def dim_labeler(signal_tensor: np.ndarray):
+    pass

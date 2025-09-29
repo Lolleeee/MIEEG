@@ -27,6 +27,6 @@ eeg_tensor, _ = wavelet_transform(eeg, bandwidth=[1, 100], fs=250, num_samples=5
 
 spatial_eeg_tensor = reshape_to_spatial(eeg_tensor)
 
-segmented_eeg_tensor = segment_data(spatial_eeg_tensor, window=100, overlap=99, axis=-1)
+segmented_eeg_tensor = segment_data(spatial_eeg_tensor, window=100, overlap=90, axis=-1)
 
 plot_spatial_eeg_tensor(segmented_eeg_tensor)
