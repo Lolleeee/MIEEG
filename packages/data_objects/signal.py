@@ -25,20 +25,26 @@ Info like patient number and trial number are extracted from the file name if no
 To guide the data into processing functions the meaning of each dimension can be provided via a dictionary.
 Parameters:
 - unpacked_data: numpy array containing data
+- fs: Sampling frequency of the signal
 - dim_dict: Dictionary mapping dimension indices to their meanings (e.g., {'rows': 0, 'cols': 1, 'frequencies': 2, 'time': 3, 'epochs': 4})
 - patient_number: Optional patient identifier
 - trial_number: Optional trial identifier
 - file_name: Optional file name to extract patient and trial identifiers if not provided 
 """
 class SignalObject:
-    def __init__(self, unpacked_data: np.ndarray, dim_dict: Dict[str, int], patient_number: int = None, trial_number: int = None, file_name: str = None):
+    def __init__(self, unpacked_data: np.ndarray, fs: int, dim_dict: Dict[str, int], patient_number: int = None, trial_number: int = None, file_name: str = None):
         self.signal = unpacked_data
+
+        self._validate_fs(fs)
 
         self._infer_from_path_identifiers(patient_number, trial_number, file_name)
 
-        self._check_dim_dict_dimensions(dim_dict)
+        self._validate_dim_dict_dimensions(dim_dict)
 
-        self.dim_dict = dim_dict
+    def _validate_fs(self, fs):
+        if not isinstance(fs, int) or fs <= 0:
+            raise ValueError("Sampling frequency (fs) must be a positive integer.")
+        self.fs = fs
 
     def _infer_from_path_identifiers(self, patient_number, trial_number, file_name):
 
@@ -63,7 +69,7 @@ class SignalObject:
             logging.warning("Trial number not provided and could not be inferred from file name.")
             self.trial = None
     
-    def _check_dim_dict_dimensions(self, dim_dict: Dict):
+    def _validate_dim_dict_dimensions(self, dim_dict: Dict):
         """
         Validate the dimension dictionary to ensure it contains valid keys and indices.
         Used the DIM_DICT_KEYS enum of the current child class to check for valid keys.
@@ -87,14 +93,19 @@ class SignalObject:
 
         if not isinstance(any(dim_dict.values()), int):
             raise ValueError("All dimension indices must be integers.")
+        
+        self.dim_dict = dim_dict
     
 
     def _apply_dim_dict(self):
         self._validate_dim_dict()
-
         for dim_key, dim_idx in self.dim_dict.items():
             dim_size = self.signal.shape[dim_idx]
             setattr(self, dim_key, dim_size)
+
+    def _edit_dim_dict(self, new_dim_dict: Dict[str, int]):
+        self._validate_dim_dict_dimensions(new_dim_dict)
+        self._apply_dim_dict()
     
     def _validate_dim_dict(self):
         pass
@@ -110,7 +121,6 @@ class EegSignal(SignalObject):
         super().__init__(*args, **kwargs)
         
         self.electrode_schema = electrode_schema
-        self.fs = fs
         self.is_spatial_signal: bool = None
         self.seconds_length: float = None
 
@@ -123,10 +133,13 @@ class EegSignal(SignalObject):
         self._infer_temporal_info()
 
     def _validate_dim_dict(self):
+        rows_attr = self.DIM_DICT_KEYS.ROWS.value
+        cols_attr = self.DIM_DICT_KEYS.COLS.value
+        chan_attr = self.DIM_DICT_KEYS.CHANNELS.value
         # dim dict should contain either (rows and cols) or channels
-        if (self.DIM_DICT_KEYS.ROWS.value in self.dim_dict and self.DIM_DICT_KEYS.COLS.value in self.dim_dict) and not self.DIM_DICT_KEYS.CHANNELS.value in self.dim_dict:
+        if (rows_attr in self.dim_dict and cols_attr in self.dim_dict) and not chan_attr in self.dim_dict:
             self.is_spatial_signal = True
-        elif self.DIM_DICT_KEYS.CHANNELS.value in self.dim_dict and not (self.DIM_DICT_KEYS.ROWS.value in self.dim_dict or self.DIM_DICT_KEYS.COLS.value in self.dim_dict):
+        elif chan_attr in self.dim_dict and not (rows_attr in self.dim_dict or cols_attr in self.dim_dict):
             self.is_spatial_signal = False
         else:
             raise ValueError("Invalid dimension dictionary configuration. Dict should contain either (rows and cols) or channels")
@@ -146,7 +159,6 @@ class EegSignal(SignalObject):
         else:
             if len(self.electrode_schema) != self.channels:
                 raise ValueError("Electrode schema and channel dimension size don't match")
-
 
     def _infer_spatial_info(self):
         channels_attr = self.DIM_DICT_KEYS.CHANNELS.value
@@ -192,8 +204,6 @@ class EegSignal(SignalObject):
 class KinematicSignal(SignalObject):
     def __init__(self, fs: int, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
-        self.fs = fs
 
         self._apply_dim_dict()
 
@@ -207,8 +217,8 @@ class KinematicSignal(SignalObject):
         ROLL = 'roll'
         PITCH = 'pitch'
         YAW = 'yaw'
-        TIME = 'time'
-        EPOCHS = 'epochs'
+        TIME = GLOBAL_DIM_KEYS.TIME.value
+        EPOCHS = GLOBAL_DIM_KEYS.EPOCHS.value
 
 
 
@@ -219,11 +229,42 @@ Handles the synchronization of all the time series when preprocessed.
 
 class MultimodalSignal():
     def __init__(self, signals: List[SignalObject]):
+        self.signals = signals
+        self.num_signals = len(signals)
 
+        self._validate_time_series()
+        self._check_sampling
 
-        self.signal_array = np.array(signals)
+    def _validate_time_series(self):
+        # Check that all signals have TIME dimension
+        time_attr = GLOBAL_DIM_KEYS.TIME.value
+        for i, signal in enumerate(self.signals):
+            if  not hasattr(signal, time_attr):
+                raise ValueError(f"Signal at index {i} missing required TIME dimension")
 
-        self.num_signals = self.signal_array.shape[0]
-    def _validate_signals_list(self):
-        
+        # Get time values from all signals
+        time_values = [getattr(signal, time_attr) for signal in self.signals]
+
+        # Check that all time values are equal
+        if not all(time_val == time_values[0] for time_val in time_values):
+            raise ValueError("All signals must have the same TIME dimension size")
+
+        # Check epochs consistency
+        signals_with_epochs = [signal for signal in self.signals if time_attr in signal.dim_dict]
+
+        if signals_with_epochs:
+            # If any signal has epochs, all must have epochs
+            if len(signals_with_epochs) != len(self.signals):
+                raise ValueError("If any signal has EPOCHS dimension, all signals must have it")
+            
+            # Check that all epoch values are equal
+            epoch_values = [getattr(signal, time_attr) for signal in signals_with_epochs]
+            if not all(epoch_val == epoch_values[0] for epoch_val in epoch_values):
+                raise ValueError("All signals must have the same EPOCHS dimension size")
+
+    def _check_sampling(self):
+        # Check that all signals have the same sampling frequency
+        fs_values = [signal.fs for signal in self.signals]
+        if not all(fs_val == fs_values[0] for fs_val in fs_values):
+            logger.warning("Found signals with different sampling frequency")
 

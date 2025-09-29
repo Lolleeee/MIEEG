@@ -4,9 +4,9 @@ import numpy as np
 import scipy.io as sio
 import plotly.graph_objects as go
 import re
-from modules.processing.wavelet import wavelet_transform
-from modules.processing.tensor_reshape import reshape_to_spatial, segment_data
-from modules.plotting.napari_plots import plot_spatial_eeg_tensor
+from packages.processing.wavelet import wavelet_transform
+from packages.processing.tensor_reshape import reshape_to_spatial, segment_data
+from packages.plotting.napari_plots import plot_spatial_eeg_tensor
 base_folder = "/media/lolly/Bruh/WAYEEGGAL_dataset/WAYEEG_preprocessed"
 patient = "P1"
 idx = [10]  # Indices of trials to plot

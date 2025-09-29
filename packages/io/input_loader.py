@@ -1,6 +1,6 @@
 import os
 from scipy.io import loadmat
-from typing import Callable, Any, Dict
+from typing import Callable, Any, Dict, List
 import logging
 import re
 from enum import Enum, auto
@@ -12,13 +12,6 @@ logger = logging.getLogger('input_loader')
 logger.setLevel(logging.WARNING)
 logger.addHandler(file_handler)
 logger.propagate = False
-
-class DIM_DICT_KEYS(Enum):
-    ROWS = 'rows'
-    COLS = 'cols'
-    FREQUENCIES = 'frequencies'
-    TIME = 'time'
-    EPOCHS = 'epochs'
 
 
 """
@@ -75,55 +68,4 @@ class FileLoader:
             logger.warning(f"Skipping unsupported file type: {os.path.basename(file_path)}")
             return None  # Skip unsupported file types/extensions
         
-"""
-Class used to create a object of a signal in which data and metadata are stored.
-Info like patient number and trial number are extracted from the file name if not provided.
-To guide the data into processing functions the meaning of each dimension can be provided via a dictionary.
-Parameters:
-- unpacked_data: numpy array containing data
-- dim_dict: Dictionary mapping dimension indices to their meanings (e.g., {'rows': 0, 'cols': 1, 'frequencies': 2, 'time': 3, 'epochs': 4})
-- patient_number: Optional patient identifier
-- trial_number: Optional trial identifier
-- file_name: Optional file name to extract patient and trial identifiers if not provided 
-"""
-class SignalObject:
-    def __init__(self, unpacked_data: np.ndarray, dim_dict: Dict[str, int], patient_number: int = None, trial_number: int = None, file_name: str = None):
-        self.signal = unpacked_data
 
-        self._infer_from_path_identifiers(patient_number, trial_number, file_name)
-
-        self._check_dim_dict_dimensions(dim_dict)
-        self.dim_dict = dim_dict
-
-    def _infer_from_path_identifiers(self, patient_number, trial_number, file_name):
-
-        if patient_number is not None:
-            self.patient = patient_number
-        if trial_number is not None:
-            self.trial = trial_number
-            
-        if file_name is not None:
-            patient_match = re.search(r'patient(\d+)', file_name, re.IGNORECASE)
-            trial_match = re.search(r'trial(\d+)', file_name, re.IGNORECASE)
-
-            if patient_match:
-                self.patient = int(patient_match.group(1))
-            if trial_match:
-                self.trial = int(trial_match.group(1))
-
-    def _check_dim_dict_dimensions(self, dim_dict: Dict):
-        if dim_dict is None:
-            raise ValueError("Dimension dictionary must be provided.")
-        
-        possible_keys = {key.value for key in DIM_DICT_KEYS}
-        for key in dim_dict.keys():
-            if key not in possible_keys:
-                raise ValueError(f"Invalid dimension key: {key}. Must be one of {possible_keys}.")
-            
-        if len(set(dim_dict.values())) != len(dim_dict.values()):
-            raise ValueError("Dimension indices must be unique.")
-        
-
-
-class EegSignal(SignalObject):
-    def __init__(self

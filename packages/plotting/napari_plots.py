@@ -58,4 +58,3 @@ def plot_spatial_eeg_tensor(eeg_tensor: np.ndarray) -> None:
 
         napari.run()
         
-
