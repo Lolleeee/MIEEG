@@ -2,7 +2,7 @@ import logging
 import numpy as np
 import os
 import re
-from typing import Any, Callable, Dict, List, Union
+from typing import Any, Callable, Dict, List, Tuple, Union
 from enum import Enum
 
 logging.basicConfig(level=logging.WARNING)
@@ -18,7 +18,7 @@ class GLOBAL_DIM_KEYS(Enum):
     TIME = 'time'
     EPOCHS = 'epochs'
 
-
+NULL_VALUES = [None, 'none', 'nan', 0, '0', '']
 """
 Class used to create a object of a signal in which data and metadata are stored.
 Info like patient number and trial number are extracted from the file name if not provided.
@@ -32,12 +32,11 @@ Parameters:
 - file_name: Optional file name to extract patient and trial identifiers if not provided 
 """
 class SignalObject:
-    def __init__(self, unpacked_data: np.ndarray, fs: int, dim_dict: Dict[str, int], patient_number: int = None, trial_number: int = None, file_name: str = None):
+    def __init__(self, unpacked_data: np.ndarray, fs: int, dim_dict: Dict[str, int], patient: Union[int, str], trial: Union[int, str]):
         self.signal = unpacked_data
-
+        self.patient = patient
+        self.trial = trial
         self._validate_fs(fs)
-
-        self._infer_from_path_identifiers(patient_number, trial_number, file_name)
 
         self._validate_dim_dict_dimensions(dim_dict)
 
@@ -45,44 +44,6 @@ class SignalObject:
         if not isinstance(fs, int) or fs <= 0:
             raise ValueError("Sampling frequency (fs) must be a positive integer.")
         self.fs = fs
-
-    def _infer_from_path_identifiers(self, patient_number, trial_number, file_name):
-
-        if patient_number is not None:
-            self.patient = patient_number
-        if trial_number is not None:
-            self.trial = trial_number
-            
-        if file_name is not None:
-
-            patient_match = re.search(r'patient(\d+)', file_name, re.IGNORECASE)
-            trial_match = re.search(r'trial(\d+)', file_name, re.IGNORECASE)
-            
-            self.patient = self._regex_patient(file_name)
-            self.trial = self._regex_trial(file_name)
-
-        if not hasattr(self, 'patient'):
-            logging.warning("Patient number not provided and could not be inferred from file name.")
-            self.patient = None
-        if not hasattr(self, 'trial'):
-            logging.warning("Trial number not provided and could not be inferred from file name.")
-            self.trial = None
-
-    def _regex_patient(self, file_name: str) -> Union[int, None]:
-        patterns = [r'patient(\d+)', r'p(\d+)']
-        for pattern in patterns:
-            match = re.search(pattern, file_name, re.IGNORECASE)
-            if match:
-                return int(match.group(1))
-        return None
-    
-    def _regex_trial(self, file_name: str) -> Union[int, None]:
-        patterns = [r'trial(\d+)', r't(\d+)']
-        for pattern in patterns:
-            match = re.search(pattern, file_name, re.IGNORECASE)
-            if match:
-                return int(match.group(1))
-        return None     
     
     def _validate_dim_dict_dimensions(self, dim_dict: Dict):
         """
@@ -117,6 +78,76 @@ class SignalObject:
         self._validate_dim_dict_dimensions(new_dim_dict)
         self._apply_dim_dict()
 
+    def _switch_dim_dict_keys(self, key_map: Dict[str, str]):
+        """
+        Switch keys in the dimension dictionary according to key_map.
+        WARNING: This does not change the order of dimensions in the signal array.
+        """
+        new_dim_dict = {}
+        for old_key, new_key in key_map.items():
+            if old_key in self.dim_dict:
+                new_dim_dict[new_key] = self.dim_dict[old_key]
+            else:
+                raise ValueError(f"Old key '{old_key}' not found in current dimension dictionary.")
+        self._edit_dim_dict(new_dim_dict)
+
+    def _reorder_signal_dimensions(self, new_order: List[str]):
+        """
+        Reorder signal dimensions to match the specified dimension names order.
+        Only the specified dimensions are reordered, others remain in their current positions.
+        
+        Parameters:
+        - new_order: List of dimension names in desired order (e.g., ['rows', 'cols'])
+        """
+        # Validate that all specified dimensions exist in dim_dict
+        for dim_name in new_order:
+            if dim_name not in self.dim_dict:
+                raise ValueError(f"Dimension '{dim_name}' not found in current dimension dictionary.")
+        
+        # Get current dimension indices for the specified order
+        current_indices = [self.dim_dict[dim_name] for dim_name in new_order]
+        
+        # Create the axes permutation
+        axes_order = list(range(self.signal.ndim))
+        
+        # Replace the first len(new_order) positions with the specified dimensions
+        for i, current_idx in enumerate(current_indices):
+            axes_order[i] = current_idx
+        
+        # Fill remaining positions with unspecified dimensions
+        specified_indices = set(current_indices)
+        remaining_indices = [i for i in range(self.signal.ndim) if i not in specified_indices]
+        
+        for i, remaining_idx in enumerate(remaining_indices):
+            axes_order[len(new_order) + i] = remaining_idx
+        
+        # Apply the transpose
+        self.signal = np.transpose(self.signal, axes=axes_order)
+        
+        # Update dim_dict to reflect new order
+        new_dim_dict = {}
+        for i, dim_name in enumerate(new_order):
+            new_dim_dict[dim_name] = i
+        
+        # Add remaining dimensions
+        remaining_dims = [dim for dim in self.dim_dict.keys() if dim not in new_order]
+        for i, dim_name in enumerate(remaining_dims):
+            new_dim_dict[dim_name] = len(new_order) + i
+        
+        self._edit_dim_dict(new_dim_dict)
+
+
+    def _check_dim_order(self, required_order: List[str]) -> bool:
+        """
+        Check if the dimensions of the SignalObject are in the required order.
+        Parameters:
+        - Signal: EegSignal object
+        - required_order: List of dimension names in the required order
+        Returns:
+        - True if dimensions are in the required order, False otherwise
+        """
+        current_order = [key for key, _ in sorted(self.dim_dict.items(), key=lambda item: item[1])]
+        return current_order == required_order
 
     def _validate_dim_dict(self):
         pass
@@ -188,7 +219,7 @@ class EegSignal(SignalObject):
             for row_idx in range(self.electrode_schema.shape[0]):
                 for col_idx in range(self.electrode_schema.shape[1]):
                     channel = self.electrode_schema[row_idx, col_idx]
-                    if str(channel).lower() in ['x', 'y', 'z', '0', 'nan', '', 'none', None]:
+                    if str(channel).lower() in NULL_VALUES:
                         self.placeholder_channels.append((row_idx, col_idx))
             self.eeg_channels = getattr(self, rows_attr) * getattr(self, cols_attr) - len(self.placeholder_channels)
         else:
@@ -285,3 +316,34 @@ class MultimodalSignal():
         if not all(fs_val == fs_values[0] for fs_val in fs_values):
             logger.warning("Found signals with different sampling frequency")
 
+
+
+class RandomSignal(SignalObject):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+    
+    class DIM_DICT_KEYS(Enum):
+        CHANNELS = 'channels'
+        DIM1 = 'dim1'
+        DIM2 = 'dim2'
+        FREQUENCIES = 'frequencies'
+        TIME = GLOBAL_DIM_KEYS.TIME.value
+        EPOCHS = GLOBAL_DIM_KEYS.EPOCHS.value
+
+    @classmethod
+    def spatial(cls, signal_shape: Tuple[int] = (2, 2, 2), fs: int = 250):
+        unpacked_data = np.random.rand(*signal_shape)
+        dim_dict = {"rows": 0, "cols": 1, "time": 2, "frequencies": 3}
+        
+        instance = cls(unpacked_data, fs, dim_dict, "random", "random")
+        instance.electrode_schema = [[f'C{x}{y}' for x in range(signal_shape[dim_dict["rows"]])] for y in range(signal_shape[dim_dict["cols"]])]
+        return instance
+
+    @classmethod
+    def non_spatial(cls, signal_shape: Tuple[int] = (2, 2, 2), fs: int = 250):
+        unpacked_data = np.random.rand(*signal_shape)
+        dim_dict = {"channels": 0, "time": 1, "frequencies": 2}
+        
+        instance = cls(unpacked_data, fs, dim_dict, "random", "random")
+        instance.electrode_schema = [f'C{i}' for i in range(signal_shape[dim_dict["channels"]])]
+        return instance

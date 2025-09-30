@@ -1,6 +1,8 @@
 import numpy as np
 from typing import Tuple, List, Union
 
+from packages.data_objects.signal import EegSignal, RandomSignal, NULL_VALUES
+
 SPATIAL_DOMAIN_MATRIX = np.array([
             [None, 'Fp1', None, 'Fp2', None],
             ['F7', 'F3', 'Fz', 'F4', 'F8'],
@@ -18,47 +20,201 @@ CHANNELS = np.array([
 ])
 
 
-def reshape_to_spatial(eeg_data: np.ndarray, nan: str = "0") -> np.ndarray:
-    """
-    Reshape EEG data from (channels, frequencies, samples) to (rows, cols, frequencies, samples) based on the spatial layout of electrodes.
-    or from (channels, samples) to (rows, cols, samples) if input is 2D.
-    Parameters:
-    - eeg_data: 2D or 3D numpy array of shape (channels, samples) or (channels, frequencies, samples)
-    
-    Returns:
-    - reshaped_data: 3D numpy array of shape (rows, cols, frequencies, samples)
-    """
-    if eeg_data.ndim not in [2, 3] or eeg_data.shape[0] != len(CHANNELS):
-        raise ValueError(f"Input data must be a 2D or 3D array with {len(CHANNELS)} channels.")
-    
-    rows, cols = SPATIAL_DOMAIN_MATRIX.shape
-    
-    if eeg_data.ndim == 2:
-        samples = eeg_data.shape[1]
-        reshaped_data = np.zeros((rows, cols, samples))
-        for i in range(rows):
-            for j in range(cols):
-                channel = SPATIAL_DOMAIN_MATRIX[i, j]
-                if channel is not None:
-                    channel_index = np.where(CHANNELS == channel)[0][0]
-                    reshaped_data[i, j, :] = eeg_data[channel_index, :]
-                else:
-                    reshaped_data[i, j, :] = 0 if nan == "0" else np.nan
-    else:  # eeg_data.ndim == 3
-        frequencies = eeg_data.shape[1]
-        samples = eeg_data.shape[2]
-        reshaped_data = np.zeros((rows, cols, frequencies, samples))
-        for i in range(rows):
-            for j in range(cols):
-                channel = SPATIAL_DOMAIN_MATRIX[i, j]
-                if channel is not None:
-                    channel_index = np.where(CHANNELS == channel)[0][0]
-                    reshaped_data[i, j, :, :] = eeg_data[channel_index, :, :]
-                else:
-                    reshaped_data[i, j, :, :] = 0 if nan == "0" else np.nan
-    
-    return reshaped_data
 
+def reshape_to_spatial(Signal: EegSignal, spatial_domain_matrix: np.ndarray) -> np.ndarray:
+    """
+    Reshape EEG signal to spatial configuration based on electrode layout.
+    Parameters:
+    - eeg_data: numpy array of shape (channels, samples) or (channels, frequencies, samples)
+    - spatial_domain_matrix: 2D numpy array defining the spatial layout of electrodes
+
+    Returns:
+    - SignalObject with signal = numpy array reshaped to spatial configuration
+    """
+    current_schema = Signal.electrode_schema
+    
+    # Check if spatial_domain_matrix has all the electrodes of the current schema
+    if not all(elem in spatial_domain_matrix for elem in current_schema if elem is not None):
+        raise ValueError("Target Spatial domain matrix does not contain all electrodes from the current schema.")
+    # Rows and Cols case
+    if spatial_domain_matrix.ndim == 2:
+        if Signal.is_spatial_signal:
+
+            if not Signal._check_dim_order(['rows', 'cols']):
+                Signal._reorder_signal_dimensions(['rows', 'cols'])
+
+            num_rows, num_cols = spatial_domain_matrix.shape
+            original_shape = Signal.signal.shape
+            new_shape = (num_rows, num_cols) + original_shape[2:]
+            reshaped_signal = np.zeros(new_shape)
+            
+            for r in range(num_rows):
+                for c in range(num_cols):
+                    electrode = spatial_domain_matrix[r, c]
+                    if electrode in NULL_VALUES:
+                        reshaped_signal[r, c, ...] = 0  # or np.nan
+                    else:
+                        electrode_idx = np.where(current_schema == electrode)
+                        electrode_idx = list(zip(*electrode_idx))[0]
+                        row = electrode_idx[0]
+                        col = electrode_idx[1]
+                        reshaped_signal[r, c, ...] = Signal.signal[row, col, ...]
+
+            Signal.signal = reshaped_signal
+
+        else:
+            if not Signal._check_dim_order(['channels']):
+                Signal._reorder_signal_dimensions(['channels'])
+
+            num_rows, num_cols = spatial_domain_matrix.shape
+            original_shape = Signal.signal.shape
+            new_shape = (num_rows, num_cols) + original_shape[1:]
+            reshaped_signal = np.zeros(new_shape)
+            
+            for r in range(num_rows):
+                for c in range(num_cols):
+                    electrode = spatial_domain_matrix[r, c]
+                    if electrode in NULL_VALUES:
+                        reshaped_signal[r, c, ...] = 0  # or np.nan
+                    else:
+                        electrode_idx = np.where(current_schema == electrode)
+                        electrode_idx = list(zip(*electrode_idx))[0]
+                        channel = electrode_idx[0]
+                        reshaped_signal[r, c, ...] = Signal.signal[channel, ...]
+                        
+            # Update SignalObject attributes
+            Signal.signal = reshaped_signal
+
+    if spatial_domain_matrix.ndim == 1:
+        if Signal.is_spatial_signal:
+            if not Signal._check_dim_order(['rows', 'cols']):
+                Signal._reorder_signal_dimensions(['rows', 'cols'])
+
+            num_electrodes = len(spatial_domain_matrix)
+            original_shape = Signal.signal.shape
+            new_shape = (num_electrodes,) + original_shape[2:]
+            reshaped_signal = np.zeros(new_shape)
+
+            for c in range(num_electrodes):
+                electrode = spatial_domain_matrix[c]
+                if electrode in NULL_VALUES:
+                    reshaped_signal[c, ...] = 0  # or np.nan
+                else:
+                    electrode_idx = np.where(current_schema == electrode)
+                    electrode_idx = list(zip(*electrode_idx))[0]
+                    row = electrode_idx[0]
+                    col = electrode_idx[1]
+                    reshaped_signal[c, ...] = Signal.signal[row, col, ...]
+            
+            # Update SignalObject attributes
+            Signal.signal = reshaped_signal
+        else:
+            if not Signal._check_dim_order(['channels']):
+                Signal._reorder_signal_dimensions(['channels'])
+
+            num_electrodes = len(spatial_domain_matrix)
+            original_shape = Signal.signal.shape
+            new_shape = (num_electrodes,) + original_shape[1:]
+            reshaped_signal = np.zeros(new_shape)
+
+            for c in range(num_electrodes):
+                electrode = spatial_domain_matrix[c]
+                if electrode in NULL_VALUES:
+                    reshaped_signal[c, ...] = 0  # or np.nan
+                else:
+                    electrode_idx = np.where(current_schema == electrode)
+                    electrode_idx = list(zip(*electrode_idx))[0]
+                    channel = electrode_idx[0]
+                    reshaped_signal[c, ...] = Signal.signal[channel, ...]
+            
+            # Update SignalObject attributes
+            Signal.signal = reshaped_signal
+    return Signal
+
+def _find_electrode_idx(current_schema, electrode):
+    """Find the index/indices of an electrode in the schema."""
+    idx = np.where(current_schema == electrode)
+    idx = list(zip(*idx))
+    if not idx:
+        raise ValueError(f"Electrode {electrode} not found in current schema.")
+    return idx[0] if len(idx) == 1 else idx[0]
+
+def _assign_to_reshaped(reshaped_signal, Signal, idx_out, idx_in, is_spatial):
+    """Assign the correct slice from Signal.signal to reshaped_signal."""
+    if is_spatial:
+        reshaped_signal[idx_out] = Signal.signal[idx_in]
+    else:
+        reshaped_signal[idx_out] = Signal.signal[idx_in[0]]
+
+def _ensure_dim_order(Signal, order):
+    if not Signal._check_dim_order(order):
+        Signal._reorder_signal_dimensions(order)
+
+def reshape_to_spatial(Signal: EegSignal, spatial_domain_matrix: np.ndarray) -> np.ndarray:
+    """
+    Reshape EEG signal to spatial configuration based on electrode layout.
+    """
+    current_schema = Signal.electrode_schema
+
+    # Check if all electrodes are present
+    if not all(elem in spatial_domain_matrix for elem in current_schema if elem is not None):
+        raise ValueError("Target Spatial domain matrix does not contain all electrodes from the current schema.")
+
+    is_spatial = Signal.is_spatial_signal
+
+    if spatial_domain_matrix.ndim == 2:
+        order = ['rows', 'cols'] if is_spatial else ['channels']
+        _ensure_dim_order(Signal, order)
+
+        num_rows, num_cols = spatial_domain_matrix.shape
+        original_shape = Signal.signal.shape
+        new_shape = (num_rows, num_cols) + original_shape[2:] if is_spatial else (num_rows, num_cols) + original_shape[1:]
+        reshaped_signal = np.zeros(new_shape)
+
+        for r in range(num_rows):
+            for c in range(num_cols):
+                electrode = spatial_domain_matrix[r, c]
+                idx_out = (r, c) + (slice(None),) * (reshaped_signal.ndim - 2)
+                if electrode in NULL_VALUES:
+                    reshaped_signal[idx_out] = 0
+                else:
+                    idx_in = _find_electrode_idx(current_schema, electrode)
+                    _assign_to_reshaped(reshaped_signal, Signal, idx_out, idx_in, is_spatial)
+
+    elif spatial_domain_matrix.ndim == 1:
+        order = ['rows', 'cols'] if is_spatial else ['channels']
+        _ensure_dim_order(Signal, order)
+
+        num_electrodes = len(spatial_domain_matrix)
+        original_shape = Signal.signal.shape
+        new_shape = (num_electrodes,) + original_shape[2:] if is_spatial else (num_electrodes,) + original_shape[1:]
+        reshaped_signal = np.zeros(new_shape)
+
+        for c in range(num_electrodes):
+            electrode = spatial_domain_matrix[c]
+            idx_out = (c,) + (slice(None),) * (reshaped_signal.ndim - 1)
+            if electrode in NULL_VALUES:
+                reshaped_signal[idx_out] = 0
+            else:
+                idx_in = _find_electrode_idx(current_schema, electrode)
+                _assign_to_reshaped(reshaped_signal, Signal, idx_out, idx_in, is_spatial)
+
+    else:
+        raise ValueError("spatial_domain_matrix must be 1D or 2D.")
+
+    Signal.signal = reshaped_signal
+    return Signal
+
+test_sig = RandomSignal.spatial(signal_shape=(2, 2, 2, 2), fs = 250).signal
+
+TEST_MATRIX = np.array([['C11', 'C10'], ['C01', 'C00']])
+print(TEST_MATRIX.shape)
+# [print(f"{c} \n") for c in TEST_MATRIX]
+# reshape_to_spatial(test_sig, TEST_MATRIX)
+idx = np.where(TEST_MATRIX == 'C11')
+idx = list(zip(*idx))[0]
+print(idx[0])
+# print(test_sig[slices])
 
 def segment_data(eeg_data: np.ndarray, sensor_data: np.ndarray = None, window: int = 0, overlap: float = 0, axis: int = -1, segment_sensor_signal: bool = False) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
     """
@@ -99,5 +255,3 @@ def segment_data(eeg_data: np.ndarray, sensor_data: np.ndarray = None, window: i
         return np.stack(eeg_segments, axis=0)
     
 
-def dim_labeler(signal_tensor: np.ndarray):
-    pass

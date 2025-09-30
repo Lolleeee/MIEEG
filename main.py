@@ -1,6 +1,7 @@
 from enum import Enum
 import os
 import glob
+from typing import Dict
 import numpy as np
 import scipy.io as sio
 import re
@@ -15,29 +16,36 @@ CHANNELS = np.array([
 
 from packages.io.input_loader import FileLoader
 
-from packages.data_objects.signal import EegSignal, SignalObject
+from packages.data_objects.signal import EegSignal
 
-from packages.processing.wavelet import eeg_wavelet_transform
-
+from packages.processing import wavelet
+from packages.processing import misc
 
 base_folder = "/media/lolly/Bruh/WAYEEGGAL_dataset/WAYEEG_preprocessed"
 out_path = "/media/lolly/Bruh/WAYEEGGAL_dataset/WAYEEG_processed"
-file_loader = FileLoader(root_folder=base_folder, folder_structure='patient', file_type='mat').load_data()
 
-for patient_name, file_name, mat in file_loader:
-    
-    eeg_data = np.array(mat["trial_eeg"])
+def unpack(input: Dict):
+    eeg_data = np.array(input["trial_eeg"])
 
-    kin_data = np.array(mat['trial_kin'])
+    kin_data = np.array(input['trial_kin'])
 
-    kin_data = kin_data[(3,7,11), :]
-    
-    EEG = EegSignal(unpacked_data=eeg_data, fs = 250, dim_dict={"channels": 0, "time": 1}, file_name=file_name)
-    
-    EEG = eeg_wavelet_transform(EEG, bandwidth=[1, 100], freq_samples=50)
+    return eeg_data, kin_data
+
+
+file_loader = FileLoader(root_folder=base_folder, folder_structure='patient', file_type='mat', unpack_func=unpack).load_data()
+
+for patient, trial, (eeg_data, kin_data) in file_loader:
+
+    EEG = EegSignal(unpacked_data=eeg_data, fs=250, dim_dict={"channels": 0, "time": 1}, patient=patient, trial=trial)
+
+    EEG = wavelet.eeg_wavelet_transform(EEG, bandwidth=[1, 100], freq_samples=50)
 
     print(EEG.signal.shape)
 
+    EEG = misc.absolute_values(EEG)
+
+    EEG = misc.normalize_values(EEG, ['channels', 'time']) #TODO should I normalize also across channels? Maybe only through time
+    break
     # spatial_eeg_tensor = reshape_to_spatial(eeg_tensor)
 
     # segmented_eeg_tensor, segmented_sensor_data = segment_data(eeg_data=spatial_eeg_tensor, sensor_data=kin_data, window=250, overlap=200, axis=-1, segment_sensor_signal=True)

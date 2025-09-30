@@ -1,6 +1,6 @@
 import os
 from scipy.io import loadmat
-from typing import Callable, Any, Dict, List
+from typing import Callable, Any, Dict, List, Union
 import logging
 import re
 from enum import Enum, auto
@@ -47,22 +47,24 @@ class FileLoader:
 
                         if packed_data is not None:
                             logger.info(f"Loaded file: {file_path}")
-                            
+
+                        self._infer_from_path_identifiers(file_path)
+
                         if self.unpack_func:
                             unpacked_data = self.unpack_func(packed_data)
                         else:
                             unpacked_data = packed_data
 
                         if unpacked_data is not None:
-                            
-                            
 
-                            yield patient_name, file, unpacked_data
+                            yield self.patient, self.trial, unpacked_data
                         else:
                             continue  
                     except Exception as e:
                         logger.warning(f"Error loading {file_path}: {e}")
-    # def add other loading methods if dataset structure is different
+
+    def _iter_other_folder_structure(self):
+        pass
     
     def _data_loader(self, file_path):
         if file_path.endswith('.mat'):
@@ -73,4 +75,31 @@ class FileLoader:
             logger.warning(f"Skipping unsupported file type: {os.path.basename(file_path)}")
             return None  # Skip unsupported file types/extensions
         
+    
+    def _infer_from_path_identifiers(self, file_name):
+            
+        self.patient = self._regex_patient(file_name)
+        self.trial = self._regex_trial(file_name)
 
+        if not hasattr(self, 'patient'):
+            logging.warning("Patient number not provided and could not be inferred from file name.")
+            self.patient = None
+        if not hasattr(self, 'trial'):
+            logging.warning("Trial number not provided and could not be inferred from file name.")
+            self.trial = None
+
+    def _regex_patient(self, file_name: str) -> Union[int, None]:
+        patterns = [r'patient(\d+)', r'p(\d+)']
+        for pattern in patterns:
+            match = re.search(pattern, file_name, re.IGNORECASE)
+            if match:
+                return int(match.group(1))
+        return None
+    
+    def _regex_trial(self, file_name: str) -> Union[int, None]:
+        patterns = [r'trial(\d+)', r't(\d+)']
+        for pattern in patterns:
+            match = re.search(pattern, file_name, re.IGNORECASE)
+            if match:
+                return int(match.group(1))
+        return None     
