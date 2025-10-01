@@ -65,6 +65,9 @@ class SignalObject:
         if not isinstance(any(dim_dict.values()), int):
             raise ValueError("All dimension indices must be integers.")
         
+        # Sort dim_dict by values (indices) in ascending order
+        self.dim_dict = dict(sorted(dim_dict.items(), key=lambda item: item[1]))
+
         self.dim_dict = dim_dict
     
 
@@ -78,7 +81,7 @@ class SignalObject:
         self._validate_dim_dict_dimensions(new_dim_dict)
         self._apply_dim_dict()
 
-    def _switch_dim_dict_keys(self, key_map: Dict[str, str]):
+    def _edit_dim_dict_keys(self, key_map: Dict[str, str]):
         """
         Switch keys in the dimension dictionary according to key_map.
         WARNING: This does not change the order of dimensions in the signal array.
@@ -148,6 +151,72 @@ class SignalObject:
         """
         current_order = [key for key, _ in sorted(self.dim_dict.items(), key=lambda item: item[1])]
         return current_order == required_order
+
+    def _insert_in_dims_dict(self, dim_names: List[str], dim_indexes: List[int], pipe: Callable = None):
+        """
+        Insert new dimensions into the dimension dictionary at specified indices.
+        Adjust existing indices to accommodate the new dimensions.
+        Parameters:
+        - dim_names: List of new dimension names to insert
+        - dim_indexes: List of indices where the new dimensions should be inserted
+        """
+        if len(dim_names) != len(dim_indexes):
+            raise ValueError("dim_names and dim_indexes must have the same length.")
+        
+        for name in dim_names:
+            if name in self.dim_dict:
+                raise ValueError(f"Dimension name '{name}' already exists in the dimension dictionary.")
+        
+        # Create a sorted list of (index, name) pairs
+        new_dims = sorted(zip(dim_indexes, dim_names))
+        
+        # Adjust existing indices and insert new dimensions
+        for index, name in new_dims:
+            for key in self.dim_dict.keys():
+                if self.dim_dict[key] >= index:
+                    self.dim_dict[key] += 1
+            self.dim_dict[name] = index
+        
+        # Reorder dim_dict by indices
+        self.dim_dict = dict(sorted(self.dim_dict.items(), key=lambda item: item[1]))
+        if pipe is not None:
+            pipe(self)
+        else:
+            print(self.dim_dict)
+        # Apply changes to attributes
+            self._apply_dim_dict()
+    
+    def _delete_from_dim_dict(self, dim_names: List[str], pipe: Callable = None):
+        """
+        Delete dimensions from the dimension dictionary by name.
+        Adjust existing indices to fill the gaps left by the removed dimensions.
+        Parameters:
+        - dim_names: List of dimension names to delete
+        """
+        for name in dim_names:
+            if name not in self.dim_dict:
+                raise ValueError(f"Dimension name '{name}' not found in the dimension dictionary.")
+        
+        # Get indices of dimensions to remove
+        remove_indices = sorted([self.dim_dict[name] for name in dim_names])
+        
+        # Remove specified dimensions
+        for name in dim_names:
+            del self.dim_dict[name]
+        
+        # Adjust remaining indices
+        for index in remove_indices:
+            for key in self.dim_dict.keys():
+                if self.dim_dict[key] > index:
+                    self.dim_dict[key] -= 1
+        
+        # Reorder dim_dict by indices
+        self.dim_dict = dict(sorted(self.dim_dict.items(), key=lambda item: item[1]))
+        if pipe is not None:
+            pipe(self)
+        else:
+            # Apply changes to attributes
+            self._apply_dim_dict()
 
     def _validate_dim_dict(self):
         pass
@@ -250,21 +319,15 @@ class EegSignal(SignalObject):
 
         
 class KinematicSignal(SignalObject):
-    def __init__(self, fs: int, *args, **kwargs):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         self._apply_dim_dict()
 
     class DIM_DICT_KEYS(Enum):
-        X = 'x'
-        Y = 'y'
-        Z = 'z'
-        ALPHA = 'alpha'
-        BETA = 'beta'
-        GAMMA = 'gamma'
-        ROLL = 'roll'
-        PITCH = 'pitch'
-        YAW = 'yaw'
+        DISPLACEMENT = 'displacement'
+        VELOCITY = 'velocity'
+        POSITION = 'position'
         TIME = GLOBAL_DIM_KEYS.TIME.value
         EPOCHS = GLOBAL_DIM_KEYS.EPOCHS.value
 
@@ -284,7 +347,7 @@ class MultimodalTimeSignal():
 
         self._validate_time_series()
         self._check_sampling()
-
+    
     def _check_multiple_signals(self, signals: List[SignalObject]):
         if not isinstance(signals, list) or len(signals) < 2:
             raise ValueError("signals must be a list with at least two SignalObject instances.")
@@ -302,7 +365,7 @@ class MultimodalTimeSignal():
 
         # Get time values from all signals
         time_values = [getattr(signal, time_attr) for signal in self.signals]
-
+        
         # Check that all time values are equal
         if not all(time_val == time_values[0] for time_val in time_values):
             raise ValueError("All signals must have the same TIME dimension size")

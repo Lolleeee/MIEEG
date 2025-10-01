@@ -1,19 +1,14 @@
 import numpy as np
-from packages.data_objects.signal import SignalObject
+from packages.data_objects.signal import GLOBAL_DIM_KEYS, SignalObject
 from typing import List
 
 
-def window_delta_displacement(sensor_data: np.ndarray, window: int, offset: int) -> np.ndarray:
+def window_delta_value(sensor_data: SignalObject, window: int, offset: int, dim: str = GLOBAL_DIM_KEYS.TIME.value) -> SignalObject:
+
     
-    if sensor_data.ndim not in [2, 3]:
-        raise ValueError("sensor_data must be 2D or 3D")
-
-    if sensor_data.ndim == 2:
-        if sensor_data.shape[0] > sensor_data.shape[1]:
-            sensor_data = sensor_data.T  # transpose if samples axis is not last
-
-    n_samples = sensor_data.shape[-1]
-
+        
+    n_samples = getattr(sensor_data, dim)
+    dim_axis = sensor_data.dim_dict[dim]
     if offset >= 0:
         start = offset
     else:
@@ -23,11 +18,14 @@ def window_delta_displacement(sensor_data: np.ndarray, window: int, offset: int)
     if start < 0 or end > n_samples:
         raise ValueError("Window with given offset is out of bounds.")
 
-    windowed = sensor_data[..., start:end]
+    slices = [slice(None)] * sensor_data.signal.ndim
+    slices[dim_axis] = slice(start, end)
+    windowed = sensor_data.signal[tuple(slices)]
 
-    first = windowed[..., 0]
-    last = windowed[..., -1]
+    first = windowed.take(indices=0, axis=dim_axis)
+    last = windowed.take(indices=-1, axis=dim_axis)
     displacement = last - first
-
-    return displacement
+    sensor_data.signal = displacement
+    sensor_data._delete_from_dim_dict([dim], pipe=None)
+    return sensor_data
 
