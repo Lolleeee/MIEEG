@@ -274,14 +274,24 @@ class KinematicSignal(SignalObject):
 This class combines multiple eterogenic time series of instances of SignalObject.
 Handles the synchronization of all the time series when preprocessed.
 """
-
-class MultimodalSignal():
+class MultimodalTimeSignal():
     def __init__(self, signals: List[SignalObject]):
+
+        self._check_multiple_signals(signals)
+
         self.signals = signals
         self.num_signals = len(signals)
 
         self._validate_time_series()
-        self._check_sampling
+        self._check_sampling()
+
+    def _check_multiple_signals(self, signals: List[SignalObject]):
+        if not isinstance(signals, list) or len(signals) < 2:
+            raise ValueError("signals must be a list with at least two SignalObject instances.")
+        
+        for i, signal in enumerate(signals):
+            if not isinstance(signal, SignalObject):
+                raise ValueError(f"Element at index {i} is not an instance of SignalObject.")
 
     def _validate_time_series(self):
         # Check that all signals have TIME dimension

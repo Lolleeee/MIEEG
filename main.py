@@ -5,7 +5,7 @@ from typing import Dict
 import numpy as np
 import scipy.io as sio
 import re
-
+from dotenv import load_dotenv
 import logging 
 
 CHANNELS = np.array([
@@ -20,9 +20,11 @@ from packages.data_objects.signal import EegSignal
 
 from packages.processing import wavelet
 from packages.processing import misc
-
-base_folder = "/media/lolly/Bruh/WAYEEGGAL_dataset/WAYEEG_preprocessed"
-out_path = "/media/lolly/Bruh/WAYEEGGAL_dataset/WAYEEG_processed"
+from packages.processing import tensor_reshape
+from packages.test import debug_constants
+load_dotenv() 
+base_folder = os.getenv("BASE_FOLDER")
+out_path = os.getenv("OUT_PATH")
 
 def unpack(input: Dict):
     eeg_data = np.array(input["trial_eeg"])
@@ -45,8 +47,8 @@ for patient, trial, (eeg_data, kin_data) in file_loader:
     EEG = misc.absolute_values(EEG)
 
     EEG = misc.normalize_values(EEG, ['channels', 'time']) #TODO should I normalize also across channels? Maybe only through time
-    break
-    # spatial_eeg_tensor = reshape_to_spatial(eeg_tensor)
+
+    EEG = tensor_reshape.reshape_to_spatial(EEG, )  # Move time axis to front
 
     # segmented_eeg_tensor, segmented_sensor_data = segment_data(eeg_data=spatial_eeg_tensor, sensor_data=kin_data, window=250, overlap=200, axis=-1, segment_sensor_signal=True)
 
