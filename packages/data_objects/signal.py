@@ -97,7 +97,7 @@ class SignalObject:
     def _reorder_signal_dimensions(self, new_order: List[str]):
         """
         Reorder signal dimensions to match the specified dimension names order.
-        Only the specified dimensions are reordered, others remain in their current positions.
+        Only the specified dimensions are reordered, others remain in their current relative positions.
         
         Parameters:
         - new_order: List of dimension names in desired order (e.g., ['rows', 'cols'])
@@ -315,7 +315,56 @@ class EegSignal(SignalObject):
         FREQUENCIES = 'frequencies'
         TIME = GLOBAL_DIM_KEYS.TIME.value
         EPOCHS = GLOBAL_DIM_KEYS.EPOCHS.value
-        
+    
+    @classmethod
+    def random(
+        cls,
+        shape: tuple = (5, 5, 1000),
+        fs: int = 250,
+        dim_dict: dict = None,
+        electrode_schema: np.ndarray = None,
+        patient: str = "random",
+        trial: str = "random"
+    ):
+        """
+        Factory for a random EegSignal.
+        - shape: tuple, shape of the signal array (default (5, 5, 1000) for spatial)
+        - fs: int, sampling frequency
+        - dim_dict: dict, dimension mapping (default spatial: {'rows': 0, 'cols': 1, 'time': 2})
+        - electrode_schema: np.ndarray, optional custom electrode schema
+        - patient: str/int, patient id
+        - trial: str/int, trial id
+        """
+        if dim_dict is None:
+            # Default to spatial if shape has at least 3 dims, else non-spatial
+            if len(shape) >= 3:
+                dim_dict = {"rows": 0, "cols": 1, "time": 2}
+            else:
+                dim_dict = {"channels": 0, "time": 1}
+
+        signal = np.random.randn(*shape)
+
+        # Generate default electrode schema if not provided
+        if electrode_schema is None:
+            if "rows" in dim_dict and "cols" in dim_dict:
+                n_rows = shape[dim_dict["rows"]]
+                n_cols = shape[dim_dict["cols"]]
+                electrode_schema = np.array(
+                    [[f"E{r}_{c}" for c in range(n_cols)] for r in range(n_rows)],
+                    dtype=object
+                )
+            elif "channels" in dim_dict:
+                n_channels = shape[dim_dict["channels"]]
+                electrode_schema = np.array([f"Ch{i}" for i in range(n_channels)])
+
+        return cls(
+            electrode_schema=electrode_schema,
+            unpacked_data=signal,
+            fs=fs,
+            dim_dict=dim_dict,
+            patient=patient,
+            trial=trial
+        )
 
         
 class KinematicSignal(SignalObject):
@@ -391,32 +440,3 @@ class MultimodalTimeSignal():
 
 
 
-class RandomSignal(SignalObject):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-    
-    class DIM_DICT_KEYS(Enum):
-        CHANNELS = 'channels'
-        DIM1 = 'dim1'
-        DIM2 = 'dim2'
-        FREQUENCIES = 'frequencies'
-        TIME = GLOBAL_DIM_KEYS.TIME.value
-        EPOCHS = GLOBAL_DIM_KEYS.EPOCHS.value
-
-    @classmethod
-    def spatial(cls, signal_shape: Tuple[int] = (2, 2, 2), fs: int = 250):
-        unpacked_data = np.random.rand(*signal_shape)
-        dim_dict = {"rows": 0, "cols": 1, "time": 2, "frequencies": 3}
-        
-        instance = cls(unpacked_data, fs, dim_dict, "random", "random")
-        instance.electrode_schema = [[f'C{x}{y}' for x in range(signal_shape[dim_dict["rows"]])] for y in range(signal_shape[dim_dict["cols"]])]
-        return instance
-
-    @classmethod
-    def non_spatial(cls, signal_shape: Tuple[int] = (2, 2, 2), fs: int = 250):
-        unpacked_data = np.random.rand(*signal_shape)
-        dim_dict = {"channels": 0, "time": 1, "frequencies": 2}
-        
-        instance = cls(unpacked_data, fs, dim_dict, "random", "random")
-        instance.electrode_schema = [f'C{i}' for i in range(signal_shape[dim_dict["channels"]])]
-        return instance

@@ -1,7 +1,7 @@
 import numpy as np
 from typing import Tuple, List, Union
 
-from packages.data_objects.signal import GLOBAL_DIM_KEYS, EegSignal, RandomSignal, NULL_VALUES, SignalObject, MultimodalTimeSignal
+from packages.data_objects.signal import GLOBAL_DIM_KEYS, EegSignal, NULL_VALUES, SignalObject, MultimodalTimeSignal
 
 import logging
 logger = logging.getLogger('ReshapeLogger')

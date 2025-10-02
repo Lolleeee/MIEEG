@@ -2,8 +2,34 @@ import numpy as np
 import time
 import os
 from typing import Dict
+from packages.data_objects.signal import SignalObject, GLOBAL_DIM_KEYS
 
-def save_tensors(out_path: str, patient_id: str, trial_id: str, eeg_data: np.ndarray, sensor_data: np.ndarray = None, out_format: str = 'npz', segmented: bool = True):
+def save_signal(signal: SignalObject, out_path: str, out_format: str = 'npz', separate_epochs: bool = True):
+    """Saves the signal data to the specified output path in the desired format."""
+    os.makedirs(out_path, exist_ok=True)
+    if signal.patient is None or signal.trial is None:
+        raise ValueError("Signal object must have patient and trial information to be saved.")
+    if separate_epochs and GLOBAL_DIM_KEYS.EPOCHS.value not in signal.dim_dict:
+        raise ValueError("Signal object does not contain segments dimension for separate epoch saving.")
+    
+    patient_id = signal.patient
+    trial_id = signal.trial
+
+    if separate_epochs and GLOBAL_DIM_KEYS.EPOCHS.value in signal.dim_dict:
+        seg_axis = signal.dim_dict[GLOBAL_DIM_KEYS.EPOCHS.value]
+        for idx in range(signal.signal.shape[seg_axis]):
+            slices = [slice(None)] * signal.signal.ndim
+            slices[seg_axis] = idx
+            seg_data = signal.signal[tuple(slices)]
+
+            package = {'data': seg_data}
+            _save_package(out_path, patient_id, trial_id, package, seg_idx=idx, fmt=out_format)
+    else:
+        package = {'data': signal.signal}
+        _save_package(out_path, patient_id, trial_id, package, seg_idx=None, fmt=out_format)
+
+# Deprecated function, kept for reference
+def dep_save_tensors(out_path: str, patient_id: str, trial_id: str, eeg_data: np.ndarray, sensor_data: np.ndarray = None, out_format: str = 'npz', segmented: bool = True):
     
     os.makedirs(out_path, exist_ok=True)
 

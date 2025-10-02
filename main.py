@@ -16,6 +16,7 @@ from packages.processing import wavelet
 from packages.processing import misc
 from packages.processing import tensor_reshape
 from packages.test import debug_constants
+from packages.io.output_packager import save_signal
 load_dotenv() 
 base_folder = os.getenv("BASE_FOLDER")
 out_path = os.getenv("OUT_PATH")
@@ -49,11 +50,5 @@ for patient, trial, (eeg_data, kin_data) in file_loader:
     print(KIN.signal.shape, KIN.dim_dict)
     KIN = sensor_data.window_delta_value(KIN, window=250//2, offset=250//2, dim='time')
     print(KIN.signal.shape, KIN.dim_dict)
-    break
-    # segmented_eeg_tensor, segmented_sensor_data = segment_data(eeg_data=spatial_eeg_tensor, sensor_data=kin_data, window=250, overlap=200, axis=-1, segment_sensor_signal=True)
-
-    # displacements = window_delta_displacement(segmented_sensor_data, window= 250//2, offset=250//2)
-
-    # save_tensors(out_path, patient_name, trial_id, eeg_data, sensor_data = None, out_format = 'npz', segmented = True)
-    
-    # print(f"Processing {patient_name} - {file_name} with EEG shape: {eeg_data.shape}")
+   
+    save_signal(EEG, out_path=out_path, out_format='npz', separate_epochs=True)

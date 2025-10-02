@@ -1,8 +1,12 @@
 import napari
 import numpy as np
+from packages.data_objects.signal import EegSignal, GLOBAL_DIM_KEYS
+from typing import List
 
-def plot_spatial_eeg_tensor(eeg_tensor: np.ndarray) -> None:
+
+def raw_plot_spatial_eeg_tensor(eeg_tensor: np.ndarray) -> None:
     """
+    WARNING: This function is experimental and may not work as intended.
     Plot the EEG tensor using napari with automated 3D volume view.
     Parameters:
     - eeg_tensor: 4D numpy array of shape (rows, cols, frequencies, samples) or 5D if segmented with shape (segments, rows, cols, frequencies, samples)
