@@ -44,11 +44,14 @@ for patient, trial, (eeg_data, kin_data) in file_loader:
     EEG = tensor_reshape.reshape_to_spatial(EEG, debug_constants.SPATIAL_DOMAIN_MATRIX_32)  # Move time axis to front
 
     EEG = tensor_reshape.segment_signal(EEG, window=250, overlap=200)
-    print(EEG.signal.shape, EEG.dim_dict)
 
-    KIN = KinematicSignal(unpacked_data=kin_data, fs=250, dim_dict={"position": 0, "time": 1}, patient=patient, trial=trial)
-    print(KIN.signal.shape, KIN.dim_dict)
-    KIN = sensor_data.window_delta_value(KIN, window=250//2, offset=250//2, dim='time')
-    print(KIN.signal.shape, KIN.dim_dict)
-   
-    save_signal(EEG, out_path=out_path, out_format='npz', separate_epochs=True)
+    EEG._reorder_signal_dimensions(['epochs', 'frequencies', 'rows', 'cols', 'time'])
+
+
+    # KIN = KinematicSignal(unpacked_data=kin_data, fs=250, dim_dict={"position": 0, "time": 1}, patient=patient, trial=trial)
+    # print(KIN.signal.shape, KIN.dim_dict)
+    # KIN = sensor_data.window_delta_value(KIN, window=250//2, offset=250//2, dim='time')
+    # print(KIN.signal.shape, KIN.dim_dict)
+    
+
+    save_signal(EEG, out_path=out_path, out_format='npz', separate_epochs=True, group_patients=True)

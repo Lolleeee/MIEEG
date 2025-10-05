@@ -4,7 +4,7 @@ import os
 from typing import Dict
 from packages.data_objects.signal import SignalObject, GLOBAL_DIM_KEYS
 
-def save_signal(signal: SignalObject, out_path: str, out_format: str = 'npz', separate_epochs: bool = True):
+def save_signal(signal: SignalObject, out_path: str, out_format: str = 'npz', separate_epochs: bool = True, group_patients: bool = False):
     """Saves the signal data to the specified output path in the desired format."""
     os.makedirs(out_path, exist_ok=True)
     if signal.patient is None or signal.trial is None:
@@ -14,7 +14,10 @@ def save_signal(signal: SignalObject, out_path: str, out_format: str = 'npz', se
     
     patient_id = signal.patient
     trial_id = signal.trial
-
+    if group_patients:
+        os.makedirs(os.path.join(out_path, f"patient{patient_id}"), exist_ok=True)
+        out_path = os.path.join(out_path, f"patient{patient_id}")
+        
     if separate_epochs and GLOBAL_DIM_KEYS.EPOCHS.value in signal.dim_dict:
         seg_axis = signal.dim_dict[GLOBAL_DIM_KEYS.EPOCHS.value]
         for idx in range(signal.signal.shape[seg_axis]):
@@ -62,12 +65,13 @@ def _save_package(out_path: str, patient_id: str, trial_id: str, package: Dict, 
 
     # Join with output directory
     full_path = os.path.join(out_path, fname)
-
+    
     # Save
     if fmt == 'npy':
         np.save(full_path, package)
     elif fmt == 'npz':
         np.savez(full_path, **package)
+        print(full_path)
     else:
         raise ValueError(f"Unsupported format: {fmt}")
 

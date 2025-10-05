@@ -182,7 +182,6 @@ class SignalObject:
         if pipe is not None:
             pipe(self)
         else:
-            print(self.dim_dict)
         # Apply changes to attributes
             self._apply_dim_dict()
     

@@ -5,6 +5,10 @@ import logging
 import re
 from enum import Enum, auto
 import numpy as np
+from sklearn.model_selection import KFold
+import torch
+from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler
+from packages.data_objects.dataset import RANDOM_SEED
 logging.basicConfig(level=logging.WARNING)
 file_handler = logging.StreamHandler()
 file_handler.setLevel(logging.WARNING)
@@ -103,3 +107,57 @@ class FileLoader:
             if match:
                 return int(match.group(1))
         return None     
+
+def get_data_loaders(dataset: Dataset, batch_size: int = 32, sets_size: dict = {'train': 0.6, 'val': 0.2, 'test': 0.2}, num_workers: int = 4) -> DataLoader:
+    indices = np.arange(len(dataset))
+
+    np.random.seed(RANDOM_SEED)
+    np.random.shuffle(indices)
+
+    train_size = int(sets_size['train'] * len(dataset))
+    val_size = int(sets_size['val'] * len(dataset))
+    if 'test' not in sets_size:
+        test_size = len(dataset) - train_size - val_size
+    else:
+        test_size = int(sets_size['test'] * len(dataset))
+
+    train_idx = indices[:train_size]
+    val_idx = indices[train_size:train_size+val_size]
+
+    if 'test' not in sets_size:
+        test_idx = indices[train_size+val_size:]
+    else:
+        test_idx = indices[train_size+val_size:train_size+val_size+test_size]
+
+    train_loader = DataLoader(dataset, sampler=SubsetRandomSampler(train_idx), batch_size=batch_size, num_workers=num_workers)
+    val_loader = DataLoader(dataset, sampler=SubsetRandomSampler(val_idx), batch_size=batch_size, num_workers=num_workers)
+    test_loader = DataLoader(dataset, sampler=SubsetRandomSampler(test_idx), batch_size=batch_size, num_workers=num_workers)
+
+    return train_loader, val_loader, test_loader
+
+def get_cv_loaders_with_static_test(dataset, batch_size=8, n_splits=5, test_size=0.2, num_workers=4):
+
+    indices = np.arange(len(dataset))
+    np.random.seed(RANDOM_SEED)
+    np.random.shuffle(indices)
+    n_test = int(test_size * len(dataset))
+    test_idx = indices[:n_test]
+    cv_idx = indices[n_test:]  
+
+    test_loader = DataLoader(dataset, batch_size=batch_size, sampler=SubsetRandomSampler(test_idx), num_workers=num_workers)
+
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=RANDOM_SEED)
+    for train_idx, val_idx in kf.split(cv_idx):
+        # Map fold indices back to the original dataset indices
+        train_sampler = SubsetRandomSampler(cv_idx[train_idx])
+        val_sampler = SubsetRandomSampler(cv_idx[val_idx])
+        train_loader = DataLoader(dataset, batch_size=batch_size, sampler=train_sampler, num_workers=num_workers)
+        val_loader = DataLoader(dataset, batch_size=batch_size, sampler=val_sampler, num_workers=num_workers)
+        yield train_loader, val_loader, test_loader
+
+def get_test_loader(dataset: Dataset, batch_size=8, num_workers=4):
+    indices = np.arange(len(dataset))
+    np.random.seed(RANDOM_SEED)
+    np.random.shuffle(indices)
+    test_loader = DataLoader(dataset, batch_size=batch_size, sampler=SubsetRandomSampler(indices), num_workers=num_workers)
+    return test_loader
