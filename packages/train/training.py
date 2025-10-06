@@ -18,6 +18,9 @@ TRAIN_CONFIG = {
     'history_plot': {'extended': False, 'save_path': './training_history'}
 }
 
+METRICS = {
+    'MAE': None
+}
 
 def _check_precision(model, *data_loaders):
     """
@@ -43,24 +46,27 @@ def _setup_model(model):
     model.to(device)
     return model, device
 
-def _train_loop(model, train_loader, criterion, optimizer, device):
+def _train_loop(model, train_loader, loss_criterion, optimizer, device, history, task_handler):
     """
     Training loop for one epoch
     """
     model.train()
     train_loss = 0.0
+    
     for batch in tqdm(train_loader):
-        batch = batch.to(device)
-        optimizer.zero_grad()
-        outputs = model(batch)
-        loss = criterion(outputs, batch)
-        loss.backward()
-        optimizer.step()
-        train_loss += loss.item() * batch.size(0)
-    train_loss /= len(train_loader.dataset)
-    return train_loss
+            
+            batch = batch.to(device)
+            optimizer.zero_grad()
+            outputs, loss = task_handler._process(loss_criterion, model, batch)
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item() * outputs.size(0)
 
-def _eval_loop(model, val_loader, criterion, device):
+    train_loss /= len(train_loader.dataset)
+    task_handler._end_epoch(len(train_loader.dataset))
+    history.log_train(train_loss, task_handler.evals)
+
+def _eval_loop(model, val_loader, loss_criterion, device, history, task_handler):
     """
     Evaluation loop for one epoch
     """
@@ -69,10 +75,11 @@ def _eval_loop(model, val_loader, criterion, device):
     with torch.no_grad():
         for batch in val_loader:
             batch = batch.to(device)
-            outputs = model(batch)
-            loss = criterion(outputs, batch)
-            val_loss += loss.item() * batch.size(0)
+            outputs, loss = task_handler._process(loss_criterion, model, batch)
+            val_loss += loss.item() * outputs.size(0)
     val_loss /= len(val_loader.dataset)
+    task_handler._end_epoch(len(val_loader.dataset))
+    history.log_val(val_loss, task_handler.evals)
     return val_loss
 
 def test_model(model, test_loader, loss_func, metrics: Dict[str, Callable], device):
@@ -94,32 +101,39 @@ def test_model(model, test_loader, loss_func, metrics: Dict[str, Callable], devi
         logging.info(f"Test {metric_name}: {metric_value:.4f}")
     return test_loss
 
-def train_model(model, train_loader, val_loader, criterion, optimizer, metrics: Dict[str, Callable], config=TRAIN_CONFIG):
-
+def train_model(model, train_loader, val_loader, loss_criterion, optimizer, metrics: Dict[str, Callable] = METRICS, config=TRAIN_CONFIG):
+    """
+    Main train model function, 
+    """
     epochs = config.get('epochs')
     
     if 'history_plot' in config:
         history_save_path = config.get('history_plot', {}).get('save_path')
         plot_type = config.get('history_plot', {}).get('plot_type')
-        history = History(save_path=history_save_path, plot_type=plot_type)
+        history = History(save_path=history_save_path, plot_type=plot_type, metrics=metrics)
     else:
-        history = NoOpHistory()
+        history = NoOpHistory(metrics=metrics)
 
     model, device = _setup_model(model)
     model = _check_precision(model, train_loader, val_loader)
 
     optimizer = optimizer(model.parameters(), lr=config.get('lr'))
-    criterion = criterion()
+
+    if isinstance(loss_criterion, type): 
+        loss_criterion = loss_criterion()
+    
+    for metric_name, metric in metrics.items():
+        if isinstance(metric, type):
+            metrics[metric_name] = metric()
+
     helper_handler = HelperHandler(config, optimizer)
 
+    task_handler = TaskHandler(loader=train_loader, metrics=metrics)
 
     for epoch in range(epochs):
-        train_loss = _train_loop(model, train_loader, criterion, optimizer, device)
-        val_loss = _eval_loop(model, val_loader, criterion, device)
-        logging.info(f"Epoch [{epoch+1}/{epochs}], Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
-
-        history.log_train_loss(train_loss)
-        history.log_val_loss(val_loss)
+        task_handler._reset_metrics()
+        _train_loop(model, train_loader, loss_criterion, optimizer, device, history, task_handler)
+        val_loss = _eval_loop(model, val_loader, loss_criterion, device, history, task_handler)
 
         helper_handler._update_helpers(model, epoch, val_loss)
 
@@ -141,7 +155,7 @@ class HelperHandler:
             elif self.lr_scheduler is not None:
                 self.lr_scheduler.step(val_loss)
             else:
-                pass.cargo/bin
+                pass
     
     
     def _initialize_helpers(self, config, optimizer):
@@ -152,3 +166,44 @@ class HelperHandler:
                 self.early_stopper = EarlyStopping(**config.get('EarlyStopping', {}))
             elif helper == 'ReduceLROnPlateau':
                 self.lr_scheduler = ReduceLROnPlateau(optimizer, **config.get('ReduceLROnPlateau', {}))
+
+class TaskHandler:
+    def __init__(self, loader, metrics):
+        self.handler = None
+        self.loader = loader
+        self.metrics = metrics
+        self._id_task()
+        self._reset_metrics()
+    def _id_task(self):
+        batch = next(iter(self.loader))
+        if isinstance(batch, tuple) and len(batch) == 2:
+            # (Input, Labels) case
+            self.handler = 2
+        else:
+            # Input = Output (Autoencoder) case
+            self.handler = 1
+    
+    def _process(self, loss_criterion, model, batch):
+        
+        if self.handler == 2:
+            outputs = model(batch[0])
+            loss = loss_criterion(outputs, batch[1])
+
+            for metric_name, metric_func in self.metrics.items():
+                eval = metric_func(outputs.detach(), batch[1])
+                self.evals[metric_name] += eval * outputs.size(0)
+
+        elif self.handler == 1:
+            outputs = model(batch)
+            loss = loss_criterion(outputs, batch)
+
+            for metric_name, metric_func in self.metrics.items():
+                eval = metric_func(outputs.detach(), batch)
+                self.evals[metric_name] += eval * outputs.size(0)
+        return outputs, loss
+    
+    def _reset_metrics(self):
+        self.evals = {metric_name: 0.0 for metric_name in self.metrics}
+
+    def _end_epoch(self, numsamples):
+        self.evals = {metric_name: metric_eval / numsamples for metric_name, metric_eval in self.evals.items()}

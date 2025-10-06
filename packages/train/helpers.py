@@ -69,24 +69,35 @@ class History:
         plot_type: str = None,
         metrics: Dict[str, Callable] = {},
     ):
-        self.train_history = {}
-        self.val_history = {}
+        self.train_history = {'loss': []}
+        self.val_history = {'loss': []}
         self.save_path = save_path
         self.plot_type = plot_type
         self.metrics = metrics
-
+        self._init_histories()
+        
     def _init_histories(self):
         for metric_name in self.metrics:
             self.train_history[metric_name] = []
             self.val_history[metric_name] = []
 
-    def log_train(self, metrics_eval: Dict[str, float]):
+    def log_train(self, loss: float, metrics_eval: Dict[str, float]):
+        self.train_history['loss'].append(loss)
+        log_string = f"Train Loss: {loss:.4f}"
         for metric_name in self.metrics:
             self.train_history[metric_name].append(metrics_eval.get(metric_name))
+            log_string += f", {metric_name}: {metrics_eval.get(metric_name):.4f}"
 
-    def log_val(self, metrics_eval: Dict[str, float]):
+        logging.info(log_string)
+
+    def log_val(self, loss: float, metrics_eval: Dict[str, float]):
+        self.val_history['loss'].append(loss)
+        log_string = f"Val Loss: {loss:.4f}"
         for metric_name in self.metrics:
             self.val_history[metric_name].append(metrics_eval.get(metric_name))
+            log_string += f", {metric_name}: {metrics_eval.get(metric_name):.4f}"
+
+        logging.info(log_string)
 
     def plot_history(self):
         if self.plot_type == "extended":
@@ -108,13 +119,8 @@ class History:
             plt.savefig(self.save_path)
             logging.info(f"Training history plot saved to {self.save_path}")
 
-
-class NoOpHistory:
-    def log_train_loss(self, *args, **kwargs):
-        pass
-
-    def log_val_loss(self, *args, **kwargs):
-        pass
-
+class NoOpHistory(History):
+    def __init__(self):
+        super().__init__
     def plot_history(self, *args, **kwargs):
         pass

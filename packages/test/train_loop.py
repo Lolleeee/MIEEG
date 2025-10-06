@@ -14,17 +14,20 @@ dataset_path = os.getenv("DATASET_PATH")
 # Dummy training loop
 optimizer = torch.optim.AdamW
 criterion = torch.nn.MSELoss
+mae = torch.nn.L1Loss
 
 config = {
     'batch_size': 32,
     'lr': 1e-3,
-    'epochs': 10,
+    'epochs': 5,
     'backup_interval': 10,
-    'EarlyStopping' : {'patience': 5, 'min_delta': 0.0},
+    'EarlyStopping' : {'patience': 1, 'min_delta': 0.1},
     'BackupManager': {'backup_interval': 10, 'backup_path': './model_backups'},
     'ReduceLROnPlateau': {'mode': 'min', 'patience': 1, 'factor': 0.1},
-    'history_plot': {'plot_type': 'tight', 'save_path': './training_history'}
+    'history_plot': {'plot_type': 'extended', 'save_path': './training_history'}
 }
+
+metrics = {'MAE': mae}
 
 dataset = Dataset.get_test_dataset(root_folder=dataset_path, unpack_func='dict', nsamples=4)
 
@@ -32,4 +35,4 @@ train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.5,
 
 print("\nStarting dummy training loop...")
 model.train()
-train_model(model, train_loader=train_loader, val_loader=val_loader, criterion=criterion, optimizer=optimizer config=config)
+train_model(model, train_loader=train_loader, val_loader=val_loader, loss_criterion=criterion, optimizer=optimizer, config=config, metrics=metrics)
