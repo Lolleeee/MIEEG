@@ -19,7 +19,7 @@ from packages.test import debug_constants
 def main():
     load_dotenv()
     base_folder = os.getenv("BASE_FOLDER")
-    out_path = os.getenv("OUT_PATH")
+    out_path = os.getenv("OUT_FOLDER")
 
     def unpack(input: Dict):
         eeg_data = np.array(input["trial_eeg"])
