@@ -1,12 +1,16 @@
-import numpy as np
-from packages.data_objects.signal import GLOBAL_DIM_KEYS, SignalObject
 from typing import List
 
+import numpy as np
 
-def window_delta_value(sensor_data: SignalObject, window: int, offset: int, dim: str = GLOBAL_DIM_KEYS.TIME.value) -> SignalObject:
+from packages.data_objects.signal import GLOBAL_DIM_KEYS, SignalObject
 
-    
-        
+
+def window_delta_value(
+    sensor_data: SignalObject,
+    window: int,
+    offset: int,
+    dim: str = GLOBAL_DIM_KEYS.TIME.value,
+) -> SignalObject:
     n_samples = getattr(sensor_data, dim)
     dim_axis = sensor_data.dim_dict[dim]
     if offset >= 0:
@@ -28,4 +32,3 @@ def window_delta_value(sensor_data: SignalObject, window: int, offset: int, dim:
     sensor_data.signal = displacement
     sensor_data._delete_from_dim_dict([dim], pipe=None)
     return sensor_data
-
