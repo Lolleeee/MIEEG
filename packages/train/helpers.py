@@ -75,7 +75,7 @@ class History:
         self.plot_type = plot_type
         self.metrics = metrics
         self._init_histories()
-        
+
     def _init_histories(self):
         for metric_name in self.metrics:
             self.train_history[metric_name] = []

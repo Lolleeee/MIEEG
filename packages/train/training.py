@@ -137,6 +137,9 @@ def train_model(model, train_loader, val_loader, loss_criterion, optimizer, metr
 
         helper_handler._update_helpers(model, epoch, val_loss)
 
+        if helper_handler.early_stopper.early_stop:
+            break
+
     history.plot_history()
     
 class HelperHandler:
@@ -144,19 +147,19 @@ class HelperHandler:
         self.backup_manager = None
         self.early_stopper = None
         self.lr_scheduler = None
-        
+        self._last_lr = config.get('lr')
         self._initialize_helpers(config, optimizer)
 
     def _update_helpers(self, model, epoch, val_loss):
             if self.backup_manager is not None:
                 self.backup_manager(model, epoch, val_loss)
-            elif self.early_stopper is not None:
+            if self.early_stopper is not None:
                 self.early_stopper(val_loss)
-            elif self.lr_scheduler is not None:
+            if self.lr_scheduler is not None:
                 self.lr_scheduler.step(val_loss)
-            else:
-                pass
-    
+                if self._last_lr != self.lr_scheduler.get_last_lr()[0]:
+                    self._last_lr = self.lr_scheduler.get_last_lr()[0]
+                    logging.info(f"Updated Learning Rate: {self.lr_scheduler.get_last_lr()[0]:.6f}")
     
     def _initialize_helpers(self, config, optimizer):
         for helper in config:
@@ -166,6 +169,7 @@ class HelperHandler:
                 self.early_stopper = EarlyStopping(**config.get('EarlyStopping', {}))
             elif helper == 'ReduceLROnPlateau':
                 self.lr_scheduler = ReduceLROnPlateau(optimizer, **config.get('ReduceLROnPlateau', {}))
+                
 
 class TaskHandler:
     def __init__(self, loader, metrics):

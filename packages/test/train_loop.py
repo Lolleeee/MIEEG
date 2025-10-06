@@ -19,19 +19,19 @@ mae = torch.nn.L1Loss
 config = {
     'batch_size': 32,
     'lr': 1e-3,
-    'epochs': 5,
+    'epochs': 8,
     'backup_interval': 10,
-    'EarlyStopping' : {'patience': 1, 'min_delta': 0.1},
+    'EarlyStopping' : {'patience': 5, 'min_delta': 0.0},
     'BackupManager': {'backup_interval': 10, 'backup_path': './model_backups'},
-    'ReduceLROnPlateau': {'mode': 'min', 'patience': 1, 'factor': 0.1},
+    'ReduceLROnPlateau': {'patience': 1, 'factor': 0.1},
     'history_plot': {'plot_type': 'extended', 'save_path': './training_history'}
 }
 
 metrics = {'MAE': mae}
 
-dataset = Dataset.get_test_dataset(root_folder=dataset_path, unpack_func='dict', nsamples=4)
+dataset = Dataset.get_test_dataset(root_folder=dataset_path, unpack_func='dict', nsamples=40)
 
-train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.5, 'val': 0.5, 'test': 0})
+train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.7, 'val': 0.3, 'test': 0})
 
 print("\nStarting dummy training loop...")
 model.train()
