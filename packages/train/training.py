@@ -5,7 +5,11 @@ from packages.train.helpers import EarlyStopping, BackupManager, History, NoOpHi
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from typing import Callable, Dict, List
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(levelname)s] %(message)s',
+    handlers=[logging.StreamHandler()]  # ensures output to stdout
+)
 
 TRAIN_CONFIG = {
     'batch_size': 32,
@@ -194,7 +198,7 @@ class TaskHandler:
             loss = loss_criterion(outputs, batch[1])
 
             for metric_name, metric_func in self.metrics.items():
-                eval = metric_func(outputs.detach(), batch[1])
+                eval = metric_func(outputs.detach().cpu(), batch[1])
                 self.evals[metric_name] += eval * outputs.size(0)
 
         elif self.handler == 1:
@@ -202,7 +206,7 @@ class TaskHandler:
             loss = loss_criterion(outputs, batch)
 
             for metric_name, metric_func in self.metrics.items():
-                eval = metric_func(outputs.detach(), batch)
+                eval = metric_func(outputs.detach().cpu(), batch)
                 self.evals[metric_name] += eval * outputs.size(0)
         return outputs, loss
     
