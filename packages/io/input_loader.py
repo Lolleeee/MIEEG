@@ -155,19 +155,16 @@ def get_data_loaders(
 
     train_loader = DataLoader(
         train_dataset,
-        sampler=SubsetRandomSampler(train_idx),
         batch_size=batch_size,
         num_workers=num_workers,
     )
     val_loader = DataLoader(
         val_dataset,
-        sampler=SubsetRandomSampler(val_idx),
         batch_size=batch_size,
         num_workers=num_workers,
     )
     test_loader = DataLoader(
         test_dataset,
-        sampler=SubsetRandomSampler(test_idx),
         batch_size=batch_size,
         num_workers=num_workers,
     )

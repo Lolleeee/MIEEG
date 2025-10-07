@@ -35,5 +35,5 @@ train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.7,
 
 print("\nStarting dummy training loop...")
 model.train()
-#train_model(model, train_loader=train_loader, val_loader=val_loader, loss_criterion=criterion, optimizer=optimizer, config=config, metrics=metrics)
-print(len(val_loader.dataset))
+train_model(model, train_loader=train_loader, val_loader=val_loader, loss_criterion=criterion, optimizer=optimizer, config=config, metrics=metrics)
+
