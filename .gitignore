@@ -3,3 +3,5 @@
 .env
 .ruff_cache/
 model_backups/
+__pycache__/
+*.pyc
