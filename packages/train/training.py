@@ -9,7 +9,6 @@ from typing import Callable, Dict, List
 
 logging.basicConfig(
     level=logging.INFO,
-    filename='training.log',
     format='[%(levelname)s] %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)],
     force=True,
