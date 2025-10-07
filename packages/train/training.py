@@ -198,7 +198,7 @@ class TaskHandler:
             loss = loss_criterion(outputs, batch[1])
 
             for metric_name, metric_func in self.metrics.items():
-                eval = metric_func(outputs.detach().cpu(), batch[1])
+                eval = metric_func(outputs.detach().cpu(), batch[1].detach().cpu())
                 self.evals[metric_name] += eval * outputs.size(0)
 
         elif self.handler == 1:
@@ -206,7 +206,7 @@ class TaskHandler:
             loss = loss_criterion(outputs, batch)
 
             for metric_name, metric_func in self.metrics.items():
-                eval = metric_func(outputs.detach().cpu(), batch)
+                eval = metric_func(outputs.detach().cpu(), batch.detach().cpu())
                 self.evals[metric_name] += eval * outputs.size(0)
         return outputs, loss
     
