@@ -59,19 +59,21 @@ def _train_loop(model, train_loader, loss_criterion, optimizer, device, history,
     """
     model.train()
     train_loss = 0.0
-    
-    for batch in tqdm(train_loader, desc="Training Batches", leave=False):
-            
+    with tqdm(desc="Training Batches", total=len(train_loader), position=0, leave=True) as batchpbar:
+        for batch in train_loader:
+                
             batch = batch.to(device)
             optimizer.zero_grad()
             outputs, loss = task_handler._process(loss_criterion, model, batch)
             loss.backward()
             optimizer.step()
             train_loss += loss.item() * outputs.size(0)
+            batchpbar.update()
 
-    train_loss /= len(train_loader.dataset)
-    task_handler._end_epoch(len(train_loader.dataset))
-    history.log_train(train_loss, task_handler.evals)
+        train_loss /= len(train_loader.dataset)
+        task_handler._end_epoch(len(train_loader.dataset))
+        history.log_train(train_loss, task_handler.evals)
+            
 
 def _eval_loop(model, val_loader, loss_criterion, device, history, task_handler):
     """
@@ -136,16 +138,18 @@ def train_model(model, train_loader, val_loader, loss_criterion, optimizer, metr
     helper_handler = HelperHandler(config, optimizer)
 
     task_handler = TaskHandler(loader=train_loader, metrics=metrics)
+    with tqdm(desc="Epochs", total=epochs, position=0, leave=True) as Epochpbar:
+        for epoch in range(epochs):
+            task_handler._reset_metrics()
+            _train_loop(model, train_loader, loss_criterion, optimizer, device, history, task_handler)
+            val_loss = _eval_loop(model, val_loader, loss_criterion, device, history, task_handler)
+            
 
-    for epoch in tqdm(range(epochs), desc="Epochs"):
-        task_handler._reset_metrics()
-        _train_loop(model, train_loader, loss_criterion, optimizer, device, history, task_handler)
-        val_loss = _eval_loop(model, val_loader, loss_criterion, device, history, task_handler)
+            helper_handler._update_helpers(model, epoch, val_loss)
 
-        helper_handler._update_helpers(model, epoch, val_loss)
-
-        if helper_handler.early_stopper.early_stop:
-            break
+            if helper_handler.early_stopper.early_stop:
+                break
+            Epochpbar.update()
 
     history.plot_history()
     
