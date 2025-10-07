@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from scipy.io import loadmat
 from sklearn.model_selection import KFold
-from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
+from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler, Subset
 
 from packages.data_objects.dataset import RANDOM_SEED
 
@@ -149,25 +149,29 @@ def get_data_loaders(
     else:
         test_idx = indices[train_size + val_size : train_size + val_size + test_size]
 
+    train_dataset = Subset(dataset, train_idx)
+    val_dataset = Subset(dataset, val_idx)
+    test_dataset = Subset(dataset, test_idx)
+
     train_loader = DataLoader(
-        dataset,
+        train_dataset,
         sampler=SubsetRandomSampler(train_idx),
         batch_size=batch_size,
         num_workers=num_workers,
     )
     val_loader = DataLoader(
-        dataset,
+        val_dataset,
         sampler=SubsetRandomSampler(val_idx),
         batch_size=batch_size,
         num_workers=num_workers,
     )
     test_loader = DataLoader(
-        dataset,
+        test_dataset,
         sampler=SubsetRandomSampler(test_idx),
         batch_size=batch_size,
         num_workers=num_workers,
     )
-
+    
     return train_loader, val_loader, test_loader
 
 
