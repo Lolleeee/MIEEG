@@ -63,3 +63,42 @@ def plot_reconstruction_distribution(
 
     plt.tight_layout()
     plt.show()
+
+def plot_reconstruction_scatter(
+    original: Union[np.ndarray, torch.Tensor],
+    reconstructed: Union[np.ndarray, torch.Tensor],
+) -> None:
+    """
+    Plot a scatter plot comparing original and reconstructed signals.
+    Parameters:
+    - original: Original signal as a numpy array or torch tensor.
+    - reconstructed: Reconstructed signal as a numpy array or torch tensor.
+    """
+
+    if isinstance(original, torch.Tensor):
+        original = original.detach().cpu().numpy()
+    if isinstance(reconstructed, torch.Tensor):
+        reconstructed = reconstructed.detach().cpu().numpy()
+
+    plt.figure(figsize=(8, 8))
+    plt.scatter(
+        original.flatten(),
+        reconstructed.flatten(),
+        alpha=0.5,
+        color="purple",
+        s=1,
+    )
+    plt.plot(
+        [original.min(), original.max()],
+        [original.min(), original.max()],
+        color="red",
+        linestyle="--",
+        label="y=x",
+    )
+    plt.title("Scatter Plot of Original vs Reconstructed Signals")
+    plt.xlabel("Original Signal")
+    plt.ylabel("Reconstructed Signal")
+    plt.legend()
+    plt.axis("equal")
+    plt.grid(True)
+    plt.show()
