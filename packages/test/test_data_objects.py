@@ -7,6 +7,43 @@ from packages.data_objects.signal import GLOBAL_DIM_KEYS, EegSignal, SignalObjec
 
 
 class RandomSignal(SignalObject):
+    """
+    A test utility class for generating random signal data that extends SignalObject.
+    This class provides convenient methods for creating various types of random signals
+    commonly used in EEG/MEG data processing, including spatial signals (with row/column
+    layout), non-spatial signals (channel-based), and frequency-domain signals.
+    The RandomSignal class automatically generates appropriate electrode schemas based on
+    the signal type and dimensions, making it useful for testing and prototyping signal
+    processing pipelines.
+    Attributes:
+        is_spatial_signal (bool): Flag indicating whether the signal has spatial layout (rows × columns).
+        electrode_schema (np.ndarray): Array containing electrode names/positions
+    Class Attributes:
+        DIM_DICT_KEYS (Enum): Enumeration of valid dimension dictionary keys including
+            CHANNELS, ROWS, COLS, TIME, EPOCHS, and FREQUENCIES
+    Parameters:
+        unpacked_data (np.ndarray): The signal data array
+        fs (int): Sampling frequency in Hz
+        dim_dict (Dict[str, int]): Dictionary mapping dimension names to array axis indices
+        patient (str, optional): Patient identifier. Defaults to "random"
+        trial (str, optional): Trial identifier. Defaults to "random"
+        is_spatial_signal (bool, optional): Whether signal has spatial layout. Defaults to False
+        electrode_schema (np.ndarray, optional): Custom electrode layout. If None, generates default
+    Methods:
+        spatial(signal_shape, fs, electrode_schema, dim_dict): 
+            Class method to create random spatial signals with row×column layout
+        non_spatial(signal_shape, fs, electrode_schema, dim_dict):
+            Class method to create random channel-based signals
+        with_frequencies(signal_shape, fs, is_spatial, dim_dict):
+            Class method to create random signals with frequency dimension
+    Examples:
+        Create a spatial signal:
+            >>> signal = RandomSignal.spatial(signal_shape=(10, 10, 1000), fs=500)
+        Create a channel-based signal:
+            >>> signal = RandomSignal.non_spatial(signal_shape=(64, 2000), fs=250)
+        Create a frequency-domain signal:
+            >>> signal = RandomSignal.with_frequencies(signal_shape=(32, 40, 1000), fs=250)    
+    """
     class DIM_DICT_KEYS(Enum):
         CHANNELS = "channels"
         ROWS = "rows"

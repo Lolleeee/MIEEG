@@ -31,6 +31,7 @@ metrics = {'MAE': mae}
 
 dataset = Dataset.get_test_dataset(root_folder=dataset_path, unpack_func='dict', nsamples=40)
 
+
 train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.7, 'val': 0.3, 'test': 0})
 
 print("\nStarting dummy training loop...")

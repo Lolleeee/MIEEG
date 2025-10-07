@@ -1,3 +1,4 @@
+import sys
 import torch
 import logging
 from tqdm import tqdm
@@ -5,10 +6,11 @@ from packages.train.helpers import EarlyStopping, BackupManager, History, NoOpHi
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from typing import Callable, Dict, List
 
+
 logging.basicConfig(
     level=logging.INFO,
     format='[%(levelname)s] %(message)s',
-    handlers=[logging.StreamHandler()]  # ensures output to stdout
+    handlers=[logging.StreamHandler(sys.stdout)]  # <— key change
 )
 
 TRAIN_CONFIG = {
@@ -28,7 +30,7 @@ METRICS = {
 
 def _check_precision(model, *data_loaders):
     """
-    Ckecks if model and dataloaders have the same precision
+    Checks if model and dataloaders have the same precision
     """
     model.eval()
     with torch.no_grad():
@@ -52,12 +54,12 @@ def _setup_model(model):
 
 def _train_loop(model, train_loader, loss_criterion, optimizer, device, history, task_handler):
     """
-    Training loop for one epoch
+    
     """
     model.train()
     train_loss = 0.0
     
-    for batch in tqdm(train_loader):
+    for batch in tqdm(train_loader, desc="Training Batches", leave=False):
             
             batch = batch.to(device)
             optimizer.zero_grad()
@@ -134,7 +136,7 @@ def train_model(model, train_loader, val_loader, loss_criterion, optimizer, metr
 
     task_handler = TaskHandler(loader=train_loader, metrics=metrics)
 
-    for epoch in range(epochs):
+    for epoch in tqdm(range(epochs), desc="Epochs"):
         task_handler._reset_metrics()
         _train_loop(model, train_loader, loss_criterion, optimizer, device, history, task_handler)
         val_loss = _eval_loop(model, val_loader, loss_criterion, device, history, task_handler)
