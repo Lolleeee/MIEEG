@@ -45,7 +45,7 @@ def main():
             electrode_schema=debug_constants.CHANNELS_32,
         )
 
-        EEG = wavelet.eeg_wavelet_transform(EEG, bandwidth=[1, 100], freq_samples=50)
+        EEG = wavelet.eeg_wavelet_transform(EEG, bandwidth=[1, 100], freq_samples=25)
 
         EEG = misc.absolute_values(EEG)
 
@@ -57,7 +57,7 @@ def main():
             EEG, debug_constants.SPATIAL_DOMAIN_MATRIX_32
         )  # Move time axis to front
 
-        EEG = tensor_reshape.segment_signal(EEG, window=250, overlap=200)
+        EEG = tensor_reshape.segment_signal(EEG, window=250, overlap=0)
 
         EEG._reorder_signal_dimensions(
             ["epochs", "frequencies", "rows", "cols", "time"]
