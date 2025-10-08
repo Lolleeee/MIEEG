@@ -67,13 +67,13 @@ class History:
         self,
         save_path: str = None,
         plot_type: str = None,
-        metrics: Dict[str, Callable] = {},
+        metrics: Dict[str, Callable] = None,
     ):
         self.train_history = {'loss': []}
         self.val_history = {'loss': []}
         self.save_path = save_path
         self.plot_type = plot_type
-        self.metrics = metrics
+        self.metrics = metrics if metrics is not None else {}
         self._init_histories()
 
     def _init_histories(self):

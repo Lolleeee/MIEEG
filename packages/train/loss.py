@@ -22,10 +22,10 @@ class VaeLoss:
             beta: Weight for KL divergence term (default: 1.0)
         '''
         # Reconstruction loss (MSE)
-        recon_loss = F.mse_loss(recon_x, x, reduction='sum')
+        recon_loss = F.mse_loss(recon_x, x, reduction='mean')
         
-        # KL divergence: -0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
-        kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+        kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
+        kld = torch.mean(kld)
 
         return recon_loss + self.beta * kld
     

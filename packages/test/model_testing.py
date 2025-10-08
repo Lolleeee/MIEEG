@@ -5,7 +5,7 @@ import torch
 
 from packages.data_objects.dataset import CustomTestDataset, Dataset
 from packages.io.input_loader import get_test_loader
-from packages.models.variational_autoencoder import ConvVAE3D
+from packages.models.variational_autoencoder import old_ConvVAE3D
 from packages.models.autoencoder import Conv3DAutoencoder 
 from packages.plotting.reconstruction_plots import plot_reconstruction_distribution
 import logging
@@ -106,7 +106,7 @@ class ModelTester:
                 train_sample = train_sample.to(device)
                 optimizer.zero_grad()
 
-                outputs, loss = task_handler._process(criterion, self.model, train_sample)
+                outputs, loss = task_handler.process(criterion, self.model, train_sample)
                 
                 loss.backward()
                 optimizer.step()
@@ -123,7 +123,7 @@ def autoencoder_assertions(model, input, output):
     assert output.shape == input.shape, f"Output shape {output.shape} doesn't match input shape {input.shape}!"
     logging.info("✓ All assertions passed!")
 
-model = ConvVAE3D(in_channels=25)
+model = old_ConvVAE3D(in_channels=25)
 model = Conv3DAutoencoder(in_channels=25, embedding_dim=256)
 model_tester = ModelTester(model, (batch_size, 25, 7, 5, 250))
 dataset_params = {'nsamples': 40, 'shape': (25, 7, 5, 250)}

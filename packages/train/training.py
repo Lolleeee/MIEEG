@@ -26,27 +26,53 @@ TRAIN_CONFIG = {
     'history_plot': {'extended': False, 'save_path': './training_history'}
 }
 
-METRICS = {
-    'MAE': None
-}
-
 def _check_precision(model, *data_loaders):
     """
     Checks if model and dataloaders have the same precision
     """
-    model.eval()
-    with torch.no_grad():
-        for loader in data_loaders:
-            for batch in loader:
-                batch = batch.to(next(model.parameters()).device)
-                output = model(batch)
-                if isinstance(output, (list, tuple)):
-                    output = output[0]
-                if output.dtype != batch.dtype:
-                    logging.warning(f"Precision mismatch: model output dtype {output.dtype}, input dtype {batch.dtype}. Converting model to {batch.dtype}.")
-                    model = model.to(batch.dtype)
-                return model
+    model_dtype = next(model.parameters()).dtype
+    for dataloader in data_loaders:
+        batch = next(iter(dataloader))
+        if batch.dtype != model_dtype:
+            logging.warning(f"DataLoader dtype {batch.dtype} does not match model dtype {model_dtype}. Converting model to {batch.dtype}.")
+            model = model.to(batch.dtype)
+            break  # No need to check further batches
     return model
+
+
+class TaskHandler:
+    def __init__(self, loader = None, metrics = None, batch_size = None):
+
+        self.batch_size = batch_size
+        self.loader = loader
+
+        self.metrics = metrics if metrics is not None else {}
+
+        self._reset_metrics()
+    
+    def process(self, loss_criterion, model, batch):
+        
+        outputs = model(batch)
+        loss = loss_criterion(outputs, batch)
+
+        self._eval_metrics(outputs, batch)
+
+        return outputs, loss
+    
+    def _eval_metrics(self, outputs, batch):  
+
+        outputs = detach_outputs(outputs)
+
+        for metric_name, metric_func in self.metrics.items():
+            eval = metric_func(outputs, batch)
+            self.evals[metric_name] += eval * self.batch_size
+
+    def _reset_metrics(self):
+        self.evals = {metric_name: 0.0 for metric_name in self.metrics}
+
+    def _end_epoch(self, numsamples):
+        self.evals = {metric_name: metric_eval / numsamples for metric_name, metric_eval in self.evals.items()}
+
 
 def _setup_model(model):
     """
@@ -56,21 +82,20 @@ def _setup_model(model):
     model.to(device)
     return model, device
 
-def _train_loop(model, train_loader, loss_criterion, optimizer, device, history, task_handler):
-    """
-    
-    """
+def _train_loop(model, train_loader, loss_criterion, optimizer, device, history, task_handler: TaskHandler):
+
     model.train()
     train_loss = 0.0
-    with tqdm(desc="Training Batches", total=len(train_loader), position=0, leave=True) as batchpbar:
+
+    with tqdm(desc="Training Batches", total=len(train_loader), position=1, leave=True) as batchpbar:
         for batch in train_loader:
                 
             batch = batch.to(device)
             optimizer.zero_grad()
-            outputs, loss = task_handler._process(loss_criterion, model, batch)
+            outputs, loss = task_handler.process(loss_criterion, model, batch)
             loss.backward()
             optimizer.step()
-            train_loss += loss.item() * outputs.size(0)
+            train_loss += loss.item() * train_loader.batch_size
             batchpbar.update()
 
         train_loss /= len(train_loader.dataset)
@@ -78,7 +103,7 @@ def _train_loop(model, train_loader, loss_criterion, optimizer, device, history,
         history.log_train(train_loss, task_handler.evals)
             
 
-def _eval_loop(model, val_loader, loss_criterion, device, history, task_handler):
+def _eval_loop(model, val_loader, loss_criterion, device, history, task_handler: TaskHandler):
     """
     Evaluation loop for one epoch
     """
@@ -87,8 +112,8 @@ def _eval_loop(model, val_loader, loss_criterion, device, history, task_handler)
     with torch.no_grad():
         for batch in val_loader:
             batch = batch.to(device)
-            outputs, loss = task_handler._process(loss_criterion, model, batch)
-            val_loss += loss.item() * outputs.size(0)
+            outputs, loss = task_handler.process(loss_criterion, model, batch)
+            val_loss += loss.item() * val_loader.batch_size
     val_loss /= len(val_loader.dataset)
     task_handler._end_epoch(len(val_loader.dataset))
     history.log_val(val_loss, task_handler.evals)
@@ -103,7 +128,7 @@ def test_model(model, test_loader, loss_func, metrics: Dict[str, Callable], devi
             batch = batch.to(device)
             outputs = model(batch)
             loss = loss_func(outputs, batch)
-            test_loss += loss.item() * batch.size(0)
+            test_loss += loss.item() * test_loader.batch_size
             for metric_name, metric_func in metrics.items():
                 metric_eval[metric_name] += metric_func(outputs, batch)
 
@@ -113,12 +138,17 @@ def test_model(model, test_loader, loss_func, metrics: Dict[str, Callable], devi
         logging.info(f"Test {metric_name}: {metric_value:.4f}")
     return test_loss
 
-def train_model(model, train_loader, val_loader, loss_criterion, optimizer, metrics: Dict[str, Callable] = METRICS, config=TRAIN_CONFIG):
+def train_model(model, train_loader, val_loader, loss_criterion, optimizer, metrics: Dict[str, Callable] = None, config=TRAIN_CONFIG):
     """
     Main train model function, 
     """
+
     epochs = config.get('epochs')
-    
+    batch_size = config.get('batch_size', TRAIN_CONFIG['batch_size'])
+    lr = config.get('lr', TRAIN_CONFIG['lr'])
+    weight_decay = config.get('weight_decay', TRAIN_CONFIG['weight_decay'])
+
+
     if 'history_plot' in config:
         history_save_path = config.get('history_plot', {}).get('save_path')
         plot_type = config.get('history_plot', {}).get('plot_type')
@@ -130,26 +160,28 @@ def train_model(model, train_loader, val_loader, loss_criterion, optimizer, metr
 
     model = _check_precision(model, train_loader, val_loader)
 
-    lr = config.get('lr', TRAIN_CONFIG['lr'])
-    weight_decay = config.get('weight_decay', TRAIN_CONFIG['weight_decay'])
-
     optimizer = optimizer(model.parameters(), lr=lr, weight_decay=weight_decay)
+
+    # Convert loss criterion and metrics to instances if they are not already
     if isinstance(loss_criterion, type): 
         loss_criterion = loss_criterion()
-    
-    for metric_name, metric in metrics.items():
-        if isinstance(metric, type):
-            metrics[metric_name] = metric()
+
+    for metric_name, metric_func in metrics.items():
+        if isinstance(metric_func, type):
+            metrics[metric_name] = metric_func()
 
     helper_handler = HelperHandler(config, optimizer)
 
-    task_handler = TaskHandler(loader=train_loader, metrics=metrics)
+    task_handler = TaskHandler(loader=train_loader, metrics=metrics, batch_size=batch_size)
+
     with tqdm(desc="Epochs", total=epochs, position=0, leave=True) as Epochpbar:
         for epoch in range(epochs):
+
             task_handler._reset_metrics()
+
             _train_loop(model, train_loader, loss_criterion, optimizer, device, history, task_handler)
+
             val_loss = _eval_loop(model, val_loader, loss_criterion, device, history, task_handler)
-            
 
             helper_handler._update_helpers(model, epoch, val_loss)
 
@@ -187,50 +219,14 @@ class HelperHandler:
             elif helper == 'ReduceLROnPlateau':
                 self.lr_scheduler = ReduceLROnPlateau(optimizer, **config.get('ReduceLROnPlateau', {}))
                 
-
-class TaskHandler:
-    def __init__(self, loader = None, metrics = None):
-        self.handler = None
-
-        self.loader = loader
-        if metrics is None:
-            self.metrics = {}
-        else:
-            self.metrics = metrics
-        
-        self._id_task()
-        self._reset_metrics()
-    def _id_task(self):
-        batch = next(iter(self.loader))
-        if isinstance(batch, tuple) and len(batch) == 2:
-            # (Input, Labels) case
-            self.handler = 2
-        else:
-            # Input = Output (Autoencoder) case
-            self.handler = 1
-    
-    def _process(self, loss_criterion, model, batch):
-        
-        if self.handler == 2:
-            outputs = model(batch[0])
-            loss = loss_criterion(outputs, batch[1])
-
-            for metric_name, metric_func in self.metrics.items():
-                eval = metric_func(outputs.detach().cpu(), batch[1].detach().cpu())
-                self.evals[metric_name] += eval * outputs.size(0)
-
-        elif self.handler == 1:
-
-            outputs = model(batch)
-            loss = loss_criterion(outputs, batch)
-
-            for metric_name, metric_func in self.metrics.items():
-                eval = metric_func(outputs.detach().cpu(), batch.detach().cpu())
-                self.evals[metric_name] += eval * outputs.size(0)
-        return outputs, loss
-    
-    def _reset_metrics(self):
-        self.evals = {metric_name: 0.0 for metric_name in self.metrics}
-
-    def _end_epoch(self, numsamples):
-        self.evals = {metric_name: metric_eval / numsamples for metric_name, metric_eval in self.evals.items()}
+def detach_outputs(outputs):
+    if isinstance(outputs, tuple):
+        # Return a new tuple with detached tensors where needed
+        return tuple(
+            output.detach().cpu() if isinstance(output, torch.Tensor) and output.requires_grad else output
+            for output in outputs
+        )
+    else:
+        if isinstance(outputs, torch.Tensor) and outputs.requires_grad:
+            return outputs.detach().cpu()
+        return outputs
