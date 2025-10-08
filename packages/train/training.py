@@ -40,6 +40,8 @@ def _check_precision(model, *data_loaders):
             for batch in loader:
                 batch = batch.to(next(model.parameters()).device)
                 output = model(batch)
+                if isinstance(output, (list, tuple)):
+                    output = output[0]
                 if output.dtype != batch.dtype:
                     logging.warning(f"Precision mismatch: model output dtype {output.dtype}, input dtype {batch.dtype}. Converting model to {batch.dtype}.")
                     model = model.to(batch.dtype)
@@ -127,7 +129,7 @@ def train_model(model, train_loader, val_loader, loss_criterion, optimizer, metr
     model, device = _setup_model(model)
 
     model = _check_precision(model, train_loader, val_loader)
-    
+
     lr = config.get('lr', TRAIN_CONFIG['lr'])
     weight_decay = config.get('weight_decay', TRAIN_CONFIG['weight_decay'])
 
