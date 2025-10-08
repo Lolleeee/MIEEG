@@ -1,4 +1,4 @@
-from packages.models.Autoencoder import Conv3DAutoencoder
+from packages.models.autoencoder import Conv3DAutoencoder
 from packages.plotting.reconstruction_plots import plot_reconstruction_distribution
 from packages.train.training import train_model
 from packages.train.helpers import BackupManager, EarlyStopping

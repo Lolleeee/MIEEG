@@ -17,6 +17,7 @@ logging.basicConfig(
 TRAIN_CONFIG = {
     'batch_size': 32,
     'lr': 1e-3,
+    'weight_decay': 1e-4,
     'epochs': 50,
     'backup_interval': 10,
     'EarlyStopping' : {'patience': 5, 'min_delta': 0.0},
@@ -124,10 +125,13 @@ def train_model(model, train_loader, val_loader, loss_criterion, optimizer, metr
         history = NoOpHistory(metrics=metrics)
 
     model, device = _setup_model(model)
+
     model = _check_precision(model, train_loader, val_loader)
+    
+    lr = config.get('lr', TRAIN_CONFIG['lr'])
+    weight_decay = config.get('weight_decay', TRAIN_CONFIG['weight_decay'])
 
-    optimizer = optimizer(model.parameters(), lr=config.get('lr'))
-
+    optimizer = optimizer(model.parameters(), lr=lr, weight_decay=weight_decay)
     if isinstance(loss_criterion, type): 
         loss_criterion = loss_criterion()
     
@@ -183,10 +187,15 @@ class HelperHandler:
                 
 
 class TaskHandler:
-    def __init__(self, loader, metrics):
+    def __init__(self, loader = None, metrics = None):
         self.handler = None
+
         self.loader = loader
-        self.metrics = metrics
+        if metrics is None:
+            self.metrics = {}
+        else:
+            self.metrics = metrics
+        
         self._id_task()
         self._reset_metrics()
     def _id_task(self):
@@ -209,6 +218,7 @@ class TaskHandler:
                 self.evals[metric_name] += eval * outputs.size(0)
 
         elif self.handler == 1:
+
             outputs = model(batch)
             loss = loss_criterion(outputs, batch)
 

@@ -1,4 +1,4 @@
-from packages.models.Autoencoder import Conv3DAutoencoder
+from packages.models.autoencoder import Conv3DAutoencoder
 from packages.train.training import train_model
 from packages.io.input_loader import get_data_loaders
 import torch

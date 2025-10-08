@@ -1,3 +1,4 @@
+import logging
 import os
 import time
 from typing import Dict
@@ -6,6 +7,7 @@ import numpy as np
 
 from packages.data_objects.signal import GLOBAL_DIM_KEYS, SignalObject
 
+logging.basicConfig(level=logging.INFO)
 
 def save_signal(
     signal: SignalObject,
@@ -101,6 +103,8 @@ def _save_package(
         np.save(full_path, package)
     elif fmt == "npz":
         np.savez(full_path, **package)
-        print(full_path)
+        logging.info(f"Saved to {full_path}")
     else:
         raise ValueError(f"Unsupported format: {fmt}")
+
+

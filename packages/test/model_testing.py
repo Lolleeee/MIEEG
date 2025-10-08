@@ -1,13 +1,18 @@
 import argparse
 
+from pyparsing import Dict
 import torch
 
-from packages.data_objects.dataset import Dataset
+from packages.data_objects.dataset import CustomTestDataset, Dataset
 from packages.io.input_loader import get_test_loader
-from packages.models.Autoencoder import Conv3DAutoencoder
+from packages.models.variational_autoencoder import ConvVAE3D
+from packages.models.autoencoder import Conv3DAutoencoder 
 from packages.plotting.reconstruction_plots import plot_reconstruction_distribution
+import logging
 
-x = torch.randn(8, 50, 7, 5, 250)
+from packages.train.loss import VaeLoss
+from packages.train.training import TaskHandler
+logging.basicConfig(level=logging.INFO)
 
 
 # --- Argument parser setup ---
@@ -25,95 +30,102 @@ embedding_dim = args.embedding_dim
 epochs = args.epochs
 batch_size = args.batch_size
 
-model = Conv3DAutoencoder(in_channels=50, embedding_dim=embedding_dim)
+class ModelTester:
+    def __init__(self, model, input_shape):
+        self.model = model
+        self.input_shape = input_shape
+        self.test_forward()
+        
+        self.is_multiout = self._is_tuple(self.output)
+
+        self.has_encoder = hasattr(self.model, 'encode')
+        self.has_decoder = hasattr(self.model, 'decode')
+
+        if self.has_encoder:
+            self.sample_encoded = self.model.encode(torch.randn(*self.input_shape))
+            self.is_multiembed = self._is_tuple(self.sample_encoded)
+
+    def test_forward(self):
+        self.model.eval()
+        with torch.no_grad():
+            x = torch.randn(*self.input_shape)
+            self.output = self.model(x)
+            return self.output
+
+    def _is_tuple(self, x):
+        return isinstance(x , tuple)
+    
+
+    def _check_shapes(self):
+        if self.is_multiout:
+            out_shapes = [o.shape for o in self.output]
+            logging.info(f"Output shapes: {out_shapes}")
+        else:
+            logging.info(f"Output shape: {self.output.shape}")
+
+        if self.has_encoder:
+            if self.is_multiembed:
+                embed_shapes = [e.shape for e in self.sample_encoded]
+                logging.info(f"Encoded shapes: {embed_shapes}")
+            else:
+                logging.info(f"Encoded shape: {self.sample_encoded.shape}")
+
+        if self.has_decoder and self.has_encoder:
+            if self.is_multiembed:
+                latent_sample = torch.randn(*self.sample_encoded[0].shape)
+            else:
+                latent_sample = torch.randn(*self.sample_encoded.shape)
+            decoded = self.model.decode(latent_sample)
+            logging.info(f"Decoded shape: {decoded.shape}")
+
+    def _get_model_size(self):
+        return sum(p.numel() * p.element_size() for p in self.model.parameters()) / 1e6
+
+    def _get_num_params(self):
+        return sum(p.numel() for p in self.model.parameters())
+
+    def model_summary(self):
+        self._check_shapes()
+        logging.info(f"Number of parameters: {self._get_num_params():.2e}")
+        logging.info(f"Model size (MB): {self._get_model_size():.2f}")
+
+    def run_dummy_training_loop(self, criterion, optimizer, dataset_params: Dict=None, device='cpu', epochs=5, batch_size=8):
+        if dataset_params is None:
+            dataset_params = {}
+        dataset = CustomTestDataset(**dataset_params)
+        test_loader = get_test_loader(dataset, batch_size=batch_size, num_workers=4)
+        task_handler = TaskHandler(loader=test_loader)
+
+        self.model.to(device)
+
+        
+        logging.info("\nStarting dummy training loop...")
+        self.model.train()
+        for epoch in range(epochs):
+            for train_sample in test_loader:
+                train_sample = train_sample.to(device)
+                optimizer.zero_grad()
+
+                outputs, loss = task_handler._process(criterion, self.model, train_sample)
+                
+                loss.backward()
+                optimizer.step()
+
+            if epoch % 2 == 0:
+                logging.info(f"Epoch {epoch}: Loss = {loss.item():.6f}")
+
+        logging.info("✓ Training loop completed!")
 
 
-output = model(x)
-print(f"Input shape: {x.shape}")
-print(f"Output shape: {output.shape}")
+def autoencoder_assertions(model, input, output):
+    assert model is not None, "Model is None!"
+    assert output is not None, "Output is None!"
+    assert output.shape == input.shape, f"Output shape {output.shape} doesn't match input shape {input.shape}!"
+    logging.info("✓ All assertions passed!")
 
-# Get embedding
-embedding = model.encode(x)
-print(f"Embedding shape: {embedding.shape}")
-
-# Verify output shape matches input
-assert x.shape == output.shape, "Output shape doesn't match input!"
-print("✓ Shape verification passed!")
-
-x = torch.randn(batch_size, 50, 7, 5, 250)
-
-output = model(x)
-print(f"Input shape: {x.shape}")
-print(f"Output shape: {output.shape}")
-
-# Get embedding
-embedding = model.encode(x)
-print(f"Embedding shape: {embedding.shape}")
-
-# Verify output shape matches input
-assert x.shape == output.shape, "Output shape doesn't match input!"
-print("✓ Shape verification passed!")
-
-# Calculate and print number of parameters in scientific notation
-num_params = sum(p.numel() for p in model.parameters())
-print(f"Number of parameters: {num_params:.2e}")
-
-print(
-    "Model size (MB):",
-    sum(p.numel() * p.element_size() for p in model.parameters()) / 1e6,
-)
-
-# Dummy training loop
-optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
-criterion = torch.nn.MSELoss()
-
-# Single sample for training
-train_sample = torch.randn(1, 50, 7, 5, 250)
-
-print("\nStarting dummy training loop...")
-model.train()
-epochs = 1
-for epoch in range(epochs):
-    optimizer.zero_grad()
-
-    # Forward pass
-    reconstructed = model(train_sample)
-    loss = criterion(reconstructed, train_sample)
-
-    # Backward pass
-    loss.backward()
-    optimizer.step()
-
-    if epoch % 2 == 0:
-        print(f"Epoch {epoch}: Loss = {loss.item():.6f}")
-
-print("✓ Training loop completed!")
-
-dataset = Dataset.get_test_dataset(
-    root_folder="/home/lolly/Desktop/test/patient1",
-    nsamples=1,
-    file_type="npz",
-    unpack_func="dict",
-)
-
-test_loader = get_test_loader(dataset, batch_size=1, num_workers=4)
-
-print("\nStarting dummy training loop...")
-model.train()
-epochs = 30
-for epoch in range(epochs):
-    for batch in test_loader:
-        optimizer.zero_grad()
-
-        # Forward pass
-        reconstructed = model(batch)
-        loss = criterion(reconstructed, batch)
-
-        # Backward pass
-        loss.backward()
-        optimizer.step()
-
-        if epoch % 2 == 0:
-            print(f"Epoch {epoch}: Loss = {loss.item():.6f}")
-
-plot_reconstruction_distribution(batch, reconstructed)
+model = ConvVAE3D(in_channels=25)
+model = Conv3DAutoencoder(in_channels=25, embedding_dim=256)
+model_tester = ModelTester(model, (batch_size, 25, 7, 5, 250))
+dataset_params = {'nsamples': 40, 'shape': (25, 7, 5, 250)}
+model_tester.model_summary()
+model_tester.run_dummy_training_loop(torch.nn.MSELoss(), torch.optim.AdamW(model.parameters(), lr=1e-3), dataset_params=dataset_params, epochs=1)

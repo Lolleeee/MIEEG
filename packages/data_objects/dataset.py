@@ -35,14 +35,15 @@ class Dataset(Dataset):
         self,
         root_folder: str,
         unpack_func: Union[Callable[[Any], Any], str] = None,
-        file_type: str = "npz",
+        file_type: str = None
     ):
         self.root_folder = root_folder
         self.file_type = file_type
         self.unpack_func = unpack_func
+
         self.file_list = self._gather_files()
 
-        if self.file_list is None or len(self.file_list) == 0:
+        if self.file_list == [] or self.file_list is None:
             logging.warning(f"No files found in {root_folder} with type {file_type}")
 
     def _gather_files(self):
@@ -93,18 +94,55 @@ class Dataset(Dataset):
         else:
             raise ValueError(f"Unsupported file type: {self.file_type}")
 
-    @classmethod
-    def get_test_dataset(
-        cls,
-        root_folder: str,
-        nsamples=1,
+class CustomTestDataset(Dataset):
+    def __init__(
+        self,
+        root_folder: str = None,
+        file_type: str = None,
         unpack_func: Union[Callable[[Any], Any], str] = None,
-        file_type: str = "npz",
+        nsamples: int = 10,
+        shape: tuple = (25, 7, 5, 250)
     ):
-        instance = cls(
-            root_folder=root_folder, unpack_func=unpack_func, file_type=file_type
-        )
-        random_indices = np.random.choice(len(instance), size=nsamples, replace=False)
+        self.nsamples = nsamples
+        self.shape = shape
+        self.root_folder = root_folder
+        self.file_type = file_type
+        self.unpack_func = unpack_func
 
-        instance.file_list = [instance.file_list[i] for i in random_indices]
-        return instance
+        if self.root_folder is not None and self.file_type is not None:
+            self.file_list = self._gather_files()
+            if len(self.file_list) < self.nsamples:
+                logger.warning(f"Requested {self.nsamples} samples, but only found {len(self.file_list)} files.")
+            self.file_list = self.file_list[:self.nsamples]
+            self.use_files = True
+        else:
+            self.use_files = False
+
+    def _gather_files(self):
+        subdirs = any(
+            os.path.isdir(os.path.join(self.root_folder, item))
+            for item in os.listdir(self.root_folder)
+        )
+        if subdirs:
+            pattern = os.path.join(self.root_folder, "**", f"*.{self.file_type}")
+            return glob.glob(pattern, recursive=True)
+        return glob.glob(os.path.join(self.root_folder, f"*.{self.file_type}"))
+
+    def __len__(self):
+        return self.nsamples
+
+    def __getitem__(self, idx):
+        if self.use_files:
+            file_path = self.file_list[idx]
+            data = self._load_file(file_path)
+            if isinstance(self.unpack_func, Callable):
+                data = self.unpack_func(data)
+            elif isinstance(self.unpack_func, str) and self.unpack_func == "dict":
+                data = unpack_func(data)
+            if isinstance(data, np.ndarray):
+                data = torch.from_numpy(data).float()
+            return data
+        else:
+            np.random.seed(RANDOM_SEED + idx)
+            data = np.random.randn(*self.shape).astype(np.float32)
+            return torch.from_numpy(data)

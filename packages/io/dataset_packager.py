@@ -25,6 +25,7 @@ def get_subset(patient_structure: bool = True, base_folder: str = None, out_fold
         out_folder = os.getenv("OUT_FOLDER")
     os.makedirs(out_folder, exist_ok=True)
     all_selected_files = []
+
     if patient_structure is False and selected_patients is not None:
         logging.warning("selected_patients is specified but patient_structure is False. Ignoring selected_patients.")
 
@@ -43,8 +44,7 @@ def get_subset(patient_structure: bool = True, base_folder: str = None, out_fold
         all_selected_files.extend(selected_files)
 
 
-    _cut_zip(out_folder, all_selected_files)
-
+    _cut_zip(out_folder)
 
 
 def _filter_patients(patient_folders, selected_patients):
@@ -57,6 +57,7 @@ def _filter_patients(patient_folders, selected_patients):
         ]
         logging.info(f"Filtered patient folders by pattern: {filtered_folders}")
         return filtered_folders
+    return patient_folders
     
 def _save_subset(data_folder, out_folder, sample_ratio):
     trial_files = [
@@ -73,11 +74,12 @@ def _save_subset(data_folder, out_folder, sample_ratio):
         )
     return selected_files
 
-def _cut_zip(out_folder, all_selected_files):
-    zip_path = out_folder.rstrip("/") + ".zip"
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        for file_path in tqdm(all_selected_files, desc="Zipping files", unit="file"):
-            arcname = os.path.basename(file_path)
-            zipf.write(file_path, arcname=arcname)
-    logging.info(f"Subset saved and zipped at {zip_path}")
+def _cut_zip(out_folder):
+    logging.info(f"Zipping subset folder {out_folder}...")
+    parent_dir = os.path.dirname(out_folder)
+    archive_path = os.path.join(parent_dir, os.path.basename(out_folder))
+    shutil.make_archive(base_name=archive_path, format='zip', root_dir=out_folder)
 
+    logging.info(f"Subset saved and zipped at {archive_path}.zip")
+
+_cut_zip("/media/lolly/Bruh/WAYEEGGAL_dataset/WAYEEG_autoencoder_subset")
