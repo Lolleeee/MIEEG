@@ -4,7 +4,8 @@ import torch.nn.functional as F
 
 class VaeLoss:
     def __init__(self, beta=1.0):
-        self.beta = beta
+        self.beta: float = beta
+        self.shape_checked: bool = None
 
     def __call__(self, outputs, inputs):
         recon_x, mu, logvar = outputs
@@ -21,6 +22,10 @@ class VaeLoss:
             logvar: Log variance of latent distribution
             beta: Weight for KL divergence term (default: 1.0)
         '''
+        if self.shape_checked is None:
+            assert recon_x.shape == x.shape, f"Reconstructed shape {recon_x.shape} doesn't match input shape {x.shape}!"
+            self.shape_checked = True
+            
         # Reconstruction loss (MSE)
         recon_loss = F.mse_loss(recon_x, x, reduction='mean')
         

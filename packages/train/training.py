@@ -190,6 +190,7 @@ def train_model(model, train_loader, val_loader, loss_criterion, optimizer, metr
             Epochpbar.update()
 
     history.plot_history()
+    return model
     
 class HelperHandler:
     def __init__(self, config, optimizer):

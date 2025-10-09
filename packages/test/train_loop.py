@@ -1,5 +1,4 @@
-from packages.models.autoencoder import Conv3DAutoencoder
-from packages.models.variational_autoencoder import ConvVAE3D, old_ConvVAE3D
+
 from packages.plotting.reconstruction_plots import plot_reconstruction_distribution
 from packages.train.training import train_model
 from packages.train.loss import VaeLoss
@@ -10,21 +9,25 @@ import torch
 import os
 from packages.data_objects.dataset import Dataset, CustomTestDataset
 from dotenv import load_dotenv
-model = ConvVAE3D(in_channels=25, latent_dim=16, hidden_dims=[32, 48, 64])
+# model = Conv3DAE(in_channels=25, embedding_dim=128, hidden_dims=[64, 128, 256], use_convnext=False)
+from packages.models.autoencoder import Conv3DAE
+model = Conv3DAE(in_channels=25, embedding_dim=128)
+print(model)
+
 load_dotenv()
-dataset_path = "/home/lolly/Desktop/test/patient1"#os.getenv("DATASET_PATH")
+dataset_path = "/media/lolly/Bruh/WAYEEGGAL_dataset/WAYEEG_autoencoder_subset"#os.getenv("DATASET_PATH")
 # Dummy training loop
 optimizer = torch.optim.AdamW
-criterion = VaeLoss(beta=4)
+criterion = torch.nn.MSELoss()# VaeLoss(beta=4)
 mae = torch.nn.L1Loss
 
 config = {
-    'batch_size': 16,
-    'lr': 1e-4,
+    'batch_size': 7,
+    'lr': 1e-3,
     'epochs': 100,
     'weight_decay': 1e-4,
     'backup_interval': 10,
-    'EarlyStopping' : {'patience': 20, 'min_delta': 0.0},
+    'EarlyStopping' : {'patience': 100, 'min_delta': 0.0},
     'BackupManager': {'backup_interval': 10, 'backup_path': './model_backups'},
     'ReduceLROnPlateau': {'patience': 15, 'factor': 0.1},
     'history_plot': {'plot_type': 'extended', 'save_path': './training_history'}
@@ -32,7 +35,7 @@ config = {
 
 metrics = {}
 
-dataset = CustomTestDataset(root_folder=dataset_path, unpack_func='dict', nsamples=128)
+dataset = CustomTestDataset(root_folder=dataset_path, unpack_func='dict', nsamples=10)
 
 
 train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.7, 'val': 0.3, 'test': 0})

@@ -5,8 +5,8 @@ import torch
 
 from packages.data_objects.dataset import CustomTestDataset, Dataset
 from packages.io.input_loader import get_test_loader
-from packages.models.variational_autoencoder import old_ConvVAE3D
-from packages.models.autoencoder import Conv3DAutoencoder 
+
+
 from packages.plotting.reconstruction_plots import plot_reconstruction_distribution
 import logging
 
@@ -123,9 +123,17 @@ def autoencoder_assertions(model, input, output):
     assert output.shape == input.shape, f"Output shape {output.shape} doesn't match input shape {input.shape}!"
     logging.info("✓ All assertions passed!")
 
-model = old_ConvVAE3D(in_channels=25)
-model = Conv3DAutoencoder(in_channels=25, embedding_dim=256)
-model_tester = ModelTester(model, (batch_size, 25, 7, 5, 250))
-dataset_params = {'nsamples': 40, 'shape': (25, 7, 5, 250)}
-model_tester.model_summary()
-model_tester.run_dummy_training_loop(torch.nn.MSELoss(), torch.optim.AdamW(model.parameters(), lr=1e-3), dataset_params=dataset_params, epochs=1)
+from packages.models.autoencoder_convnext import Conv3DAE as new_Conv3DAE
+# model = Conv3DAE(in_channels=25, embedding_dim=16, hidden_dims=[32, 48])
+model1 = new_Conv3DAE(in_channels=25, embedding_dim=16, hidden_dims=[64, 128, 256], use_convnext=False)
+
+print(model1)
+
+from packages.models.autoencoder import Conv3DAE as old_Conv3DAE
+model2 = old_Conv3DAE(in_channels=25)
+
+print(model2)
+# model_tester = ModelTester(model, (batch_size, 25, 7, 5, 250))
+# dataset_params = {'nsamples': 40, 'shape': (25, 7, 5, 250)}
+# model_tester.model_summary()
+# model_tester.run_dummy_training_loop(VaeLoss(), torch.optim.AdamW(model.parameters(), lr=1e-3), dataset_params=dataset_params, epochs=1)

@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class ConvVAE3D(nn.Module):
+class Conv3DVAE(nn.Module):
     def __init__(self, in_channels=50, latent_dim=128, hidden_dims=None):
         '''
         Convolutional Variational Autoencoder for 5D tensors.
@@ -14,7 +14,7 @@ class ConvVAE3D(nn.Module):
         
         Input shape: (batch, in_channels, 7, 5, 250)
         '''
-        super(ConvVAE3D, self).__init__()
+        super(Conv3DVAE, self).__init__()
         
         self.in_channels = in_channels
         self.latent_dim = latent_dim
@@ -24,6 +24,9 @@ class ConvVAE3D(nn.Module):
             hidden_dims = [32, 64, 128]
         
         self.hidden_dims = hidden_dims
+        
+        # Track spatial dimensions at each encoder layer
+        self.encoder_spatial_dims = self._compute_encoder_spatial_dims((7, 5, 250), len(hidden_dims))
         
         # ENCODER - Build dynamically based on hidden_dims
         encoder_layers = []
@@ -39,13 +42,9 @@ class ConvVAE3D(nn.Module):
         
         self.encoder = nn.Sequential(*encoder_layers)
         
-        # Calculate flattened dimension dynamically
-        # For input (7, 5, 250) with 2 stride-2 convolutions:
-        # After layer 1: (7, 5, 250) - no downsampling
-        # After layer 2: (4, 3, 125) - stride 2
-        # After layer 3: (2, 2, 63) - stride 2
-        spatial_dims = self._calculate_spatial_dims(hidden_dims)
-        self.flatten_dim = hidden_dims[-1] * spatial_dims[0] * spatial_dims[1] * spatial_dims[2]
+        # Calculate flattened dimension after encoder
+        final_spatial = self.encoder_spatial_dims[-1]
+        self.flatten_dim = hidden_dims[-1] * final_spatial[0] * final_spatial[1] * final_spatial[2]
         
         # Latent space mapping
         self.fc_mu = nn.Linear(self.flatten_dim, latent_dim)
@@ -53,13 +52,22 @@ class ConvVAE3D(nn.Module):
         
         # Decoder input
         self.decoder_input = nn.Linear(latent_dim, self.flatten_dim)
-        self.spatial_dims = spatial_dims
         
         # DECODER - Build dynamically (reverse of encoder)
         decoder_layers = []
         reversed_hidden_dims = list(reversed(hidden_dims))
         
         for i in range(len(reversed_hidden_dims) - 1):
+            # Get corresponding spatial dimensions
+            spatial_idx_in = len(self.encoder_spatial_dims) - 1 - i
+            spatial_idx_out = spatial_idx_in - 1
+            
+            input_spatial = self.encoder_spatial_dims[spatial_idx_in]
+            target_spatial = self.encoder_spatial_dims[spatial_idx_out]
+            
+            # Calculate output padding dynamically
+            output_padding = self._compute_output_padding(input_spatial, target_spatial)
+            
             decoder_layers.extend([
                 nn.ConvTranspose3d(
                     reversed_hidden_dims[i],
@@ -67,7 +75,7 @@ class ConvVAE3D(nn.Module):
                     kernel_size=3,
                     stride=2,
                     padding=1,
-                    output_padding=self._get_output_padding(i)
+                    output_padding=output_padding
                 ),
                 nn.BatchNorm3d(reversed_hidden_dims[i + 1]),
                 nn.ReLU()
@@ -80,28 +88,42 @@ class ConvVAE3D(nn.Module):
         
         self.decoder = nn.Sequential(*decoder_layers)
     
-    def _calculate_spatial_dims(self, hidden_dims):
-        '''Calculate spatial dimensions after encoder'''
-        h, w, d = 7, 5, 250
+    def _compute_encoder_spatial_dims(self, input_shape, num_layers):
+        '''Compute spatial dimensions at each encoder layer'''
+        dims = [input_shape]
+        h, w, d = input_shape
         
-        # First layer has stride 1
-        # Subsequent layers have stride 2
-        for i, _ in enumerate(hidden_dims):
-            if i > 0:  # Skip first layer
-                h = (h + 2 * 1 - 3) // 2 + 1
-                w = (w + 2 * 1 - 3) // 2 + 1
-                d = (d + 2 * 1 - 3) // 2 + 1
+        for i in range(num_layers):
+            if i == 0:  # First layer has stride 1
+                h_new, w_new, d_new = h, w, d
+            else:  # Subsequent layers have stride 2
+                # Formula: floor((n + 2*padding - kernel_size) / stride) + 1
+                h_new = (h + 2 * 1 - 3) // 2 + 1
+                w_new = (w + 2 * 1 - 3) // 2 + 1
+                d_new = (d + 2 * 1 - 3) // 2 + 1
+            
+            h, w, d = h_new, w_new, d_new
+            dims.append((h, w, d))
         
-        return (h, w, d)
-    
-    def _get_output_padding(self, layer_idx):
-        '''Determine output padding for transposed convolutions'''
-        # Adjust based on layer to match original dimensions
-        if layer_idx == 0:
-            return (1, 0, 0)
-        elif layer_idx == 1:
-            return (0, 0, 1)
-        return (0, 0, 0)
+        return dims
+
+    def _compute_output_padding(self, input_spatial, target_spatial):
+        '''
+        Calculate output padding for transposed convolution.
+        Formula: output = (input - 1) * stride - 2 * padding + kernel_size + output_padding
+        With stride=2, padding=1, kernel_size=3:
+        output = (input - 1) * 2 + 1 + output_padding
+        So: output_padding = target - ((input - 1) * 2 + 1)
+        '''
+        out_pad = []
+        for inp, targ in zip(input_spatial, target_spatial):
+            # Calculate what we'd get without output_padding
+            expected = (inp - 1) * 2 - 2 * 1 + 3
+            # Calculate needed output_padding
+            pad = targ - expected
+            out_pad.append(pad)
+        
+        return tuple(out_pad)
     
     def encode(self, x):
         '''Encode input to latent space parameters'''
@@ -121,7 +143,8 @@ class ConvVAE3D(nn.Module):
     def decode(self, z):
         '''Decode latent vector to reconstruction'''
         h = self.decoder_input(z)
-        h = h.view(-1, self.hidden_dims[-1], *self.spatial_dims)  # Reshape to spatial dimensions
+        final_spatial = self.encoder_spatial_dims[-1]
+        h = h.view(-1, self.hidden_dims[-1], *final_spatial)  # Reshape to spatial dimensions
         reconstruction = self.decoder(h)
         return reconstruction
     
@@ -133,7 +156,8 @@ class ConvVAE3D(nn.Module):
         return reconstruction, mu, logvar
 
 
-class old_ConvVAE3D(nn.Module):
+
+class vanilla_Conv3DVAE(nn.Module):
     def __init__(self, in_channels=50, latent_dim=128):
         '''
         Convolutional Variational Autoencoder for 5D tensors.
@@ -144,7 +168,7 @@ class old_ConvVAE3D(nn.Module):
         
         Input shape: (batch, in_channels, 7, 5, 250)
         '''
-        super(old_ConvVAE3D, self).__init__()
+        super(vanilla_Conv3DVAE, self).__init__()
         
         self.in_channels = in_channels
         self.latent_dim = latent_dim

@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 
 
-class Conv3DAutoencoder(nn.Module):
+class Conv3DAE(nn.Module):
     def __init__(self, in_channels=50, embedding_dim=128):
         """
         3D Convolutional Autoencoder for input shape [batch, 50, 7, 5, 250]
@@ -13,23 +13,22 @@ class Conv3DAutoencoder(nn.Module):
             in_channels: Number of input channels (50 in your case)
             embedding_dim: Size of the latent embedding space
         """
-        super(Conv3DAutoencoder, self).__init__()
+        super(Conv3DAE, self).__init__()
 
         # Encoder
         self.encoder = nn.Sequential(
-            # Input: [batch, 50, 7, 5, 250]
+
             nn.Conv3d(in_channels, 64, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm3d(64),
             nn.ReLU(),
-            # [batch, 64, 7, 5, 250]
+
             nn.Conv3d(64, 128, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm3d(128),
             nn.ReLU(),
-            # [batch, 128, 4, 3, 125]
+
             nn.Conv3d(128, 256, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm3d(256),
             nn.ReLU(),
-            # [batch, 256, 2, 2, 63]
         )
 
         # Calculate flattened size after encoder
