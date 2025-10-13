@@ -1,13 +1,14 @@
 import glob
 import os
 import re
-from typing import Any, Callable, Dict, Union
-
+from typing import Any, Callable, Dict, Union, Tuple
+from scipy.io import loadmat
 import numpy as np
 import scipy.io as sio
 import torch
 from dotenv import load_dotenv
 from torch.utils.data import Dataset
+from tqdm import tqdm
 
 load_dotenv()
 import logging
@@ -24,125 +25,191 @@ logger.propagate = False
 
 RANDOM_SEED = 42
 
+FILE_LOADING_FUNCTIONS = {
+    ".mat": loadmat,
+    ".npy": np.load,
+    ".npz": np.load,
+    ".pt": torch.load,
+}
 
-def unpack_func(data: Dict[str, Any]) -> Any:
-    data = data["data"]
-    return data
+def _filetype_loader(file_path):
+    _, ext = os.path.splitext(file_path)
+    if ext in FILE_LOADING_FUNCTIONS:
+        file = FILE_LOADING_FUNCTIONS[ext](file_path)
+    else:
+        raise TypeError(f"Unsupported file type: {os.path.basename(file_path)}")
+    return file 
+
+def general_unpack_func(data: Dict[str, Any]) -> Any:
+        data = data["data"]
+        return data
+
+class BasicDataset():
+    def __init__(self, root_folder: str, unpack_func: Callable[[Any], Any] = None):
+
+        self.root_folder = root_folder
+
+        if unpack_func is None:
+            self.unpack_func = general_unpack_func
+        else:
+            self.unpack_func = unpack_func
+
+        self.item_list = []
+
+        if root_folder is not None and os.path.isdir(root_folder):
+            self._get_item_list()
+
+    def __len__(self):
+        return len(self.item_list)
+    
+    def __getitem__(self, idx):
+        item_path = self.item_list[idx]
+        try:
+            packed_data = _filetype_loader(item_path)
+
+            if self.unpack_func:
+                unpacked_data = self.unpack_func(packed_data)
+            else:
+                unpacked_data = packed_data
 
 
-class Dataset(Dataset):
+            return unpacked_data
+        except Exception as e:
+            raise TypeError(f"Error loading {item_path}: {e}")
+
+         
+
+    # Recursively gather all file paths inside root_folder
+    def _get_item_list(self, base_folder: str = None):
+        if base_folder is None:
+            base_folder = self.root_folder
+
+        for item in os.listdir(base_folder):
+            item_path = os.path.join(base_folder, item)
+            if os.path.isdir(item_path):
+                self._get_item_list(item_path)
+            else:
+                self.item_list.append(item_path)
+
+
+class FileLoader(BasicDataset):
+    def __init__(
+        self,
+        root_folder,
+        unpack_func: Callable[[Any], Any] = None,
+        yield_identifiers: bool = False,
+    ):
+        super().__init__(root_folder, unpack_func)
+        self.yield_identifiers = yield_identifiers
+    
+    def __getitem__(self, idx):
+        super_data = super().__getitem__(idx)
+        if self.yield_identifiers:
+            file_path = self.item_list[idx]
+            patient, trial = self._infer_from_path_identifiers(file_path)
+            return patient, trial, super_data
+        else:
+            return super_data
+        
+    def __iter__(self):
+        for idx in range(len(self)):
+            yield self[idx]
+
+    def _infer_from_path_identifiers(self, file_name):
+        patient = self._regex_patient(file_name)
+        trial = self._regex_trial(file_name)
+
+        if patient is None:
+            logging.warning(
+                "Patient number not provided and could not be inferred from file name."
+            )
+
+        if trial is None:
+            logging.warning(
+                "Trial number not provided and could not be inferred from file name."
+            )
+
+        return patient, trial
+    
+    def _regex_patient(self, file_name: str) -> Union[int, None]:
+        patterns = [r"patient(\d+)", r"p(\d+)"]
+        for pattern in patterns:
+            match = re.search(pattern, file_name, re.IGNORECASE)
+            if match:
+                return int(match.group(1))
+        return None
+
+    def _regex_trial(self, file_name: str) -> Union[int, None]:
+        patterns = [r"trial(\d+)", r"t(\d+)"]
+        for pattern in patterns:
+            match = re.search(pattern, file_name, re.IGNORECASE)
+            if match:
+                return int(match.group(1))
+        return None
+
+
+
+
+class TorchDataset(Dataset, BasicDataset):
     def __init__(
         self,
         root_folder: str,
         unpack_func: Union[Callable[[Any], Any], str] = None,
-        file_type: str = None
     ):
-        self.root_folder = root_folder
-        self.file_type = file_type
-        self.unpack_func = unpack_func
-
-        self.file_list = self._gather_files()
-
-        if self.file_list == [] or self.file_list is None:
-            logging.warning(f"No files found in {root_folder} with type {file_type}")
-
-    def _gather_files(self):
-        # Check if there are subdirectories (patient folders)
-        subdirs = any(
-            os.path.isdir(os.path.join(self.root_folder, item))
-            for item in os.listdir(self.root_folder)
-        )
-        if subdirs:
-            # If there are subdirectories, search recursively
-            pattern = os.path.join(self.root_folder, "**", f"*.{self.file_type}")
-            return glob.glob(pattern, recursive=True)
-        if self.file_type == "npz":
-            return glob.glob(os.path.join(self.root_folder, "*.npz"))
-        elif self.file_type == "mat":
-            return glob.glob(os.path.join(self.root_folder, "*.mat"))
-        elif self.file_type == "npy":
-            return glob.glob(os.path.join(self.root_folder, "*.npy"))
-        elif self.file_type == "pt":
-            return glob.glob(os.path.join(self.root_folder, "*.pt"))
-        else:
-            raise ValueError(f"Unsupported file type: {self.file_type}")
-
-    def __len__(self):
-        return len(self.file_list)
+        BasicDataset.__init__(self, root_folder, unpack_func)
+        self._norm_params = None
 
     def __getitem__(self, idx):
-        file_path = self.file_list[idx]
-        data = self._load_file(file_path)
-        if isinstance(self.unpack_func, Callable):
-            data = self.unpack_func(data)
-        elif isinstance(self.unpack_func, str) and self.unpack_func == "dict":
-            data = unpack_func(data)
-
+        data = BasicDataset.__getitem__(self, idx)
         if isinstance(data, np.ndarray):
             data = torch.from_numpy(data).float()
+
+        if self._norm_params is not None:
+           data = self._normalize_item(data)
+        
         return data
+    
+    def _normalize_item(self, item):
+        mean = self._norm_params[0]
+        std = self._norm_params[1]
+        try:
+            item = (item - mean) / (std + 1e-10)
+            return item
+        except Exception as e:
+            raise ValueError(f"Error normalizing data: {e}")
 
-    def _load_file(self, file_path: str):
-        if self.file_type == "npz":
-            return np.load(file_path)
-        elif self.file_type == "mat":
-            return sio.loadmat(file_path)
-        elif self.file_type == "npy":
-            return np.load(file_path)
-        elif self.file_type == "pt":
-            return torch.load(file_path)
-        else:
-            raise ValueError(f"Unsupported file type: {self.file_type}")
-
-class CustomTestDataset(Dataset):
+class CustomTestDataset(Dataset, BasicDataset):
     def __init__(
         self,
         root_folder: str = None,
-        file_type: str = None,
-        unpack_func: Union[Callable[[Any], Any], str] = None,
+        unpack_func: Union[Callable[[Any], Any], str] = general_unpack_func,
         nsamples: int = 10,
         shape: tuple = (25, 7, 5, 250)
-    ):
+    ):  
+        BasicDataset.__init__(self, root_folder, unpack_func)
         self.nsamples = nsamples
         self.shape = shape
-        self.root_folder = root_folder
-        self.file_type = file_type
-        self.unpack_func = unpack_func
+        
 
-        if self.root_folder is not None and self.file_type is not None:
-            self.file_list = self._gather_files()
-            if len(self.file_list) < self.nsamples:
-                logger.warning(f"Requested {self.nsamples} samples, but only found {len(self.file_list)} files.")
-            self.file_list = self.file_list[:self.nsamples]
+        if self.root_folder is not None and os.path.isdir(self.root_folder):
+            if len(self.item_list) < self.nsamples:
+                self.nsamples = len(self.item_list)
+                logger.warning(f"Requested {self.nsamples} samples, but only found {len(self.item_list)} files: taking {len(self.item_list)} files.")
+            self.item_list = np.random.choice(self.item_list, self.nsamples, replace=False)
             self.use_files = True
         else:
+            logging.warning("No root_folder or file_type provided. Using random data generation.")
             self.use_files = False
-
-    def _gather_files(self):
-        subdirs = any(
-            os.path.isdir(os.path.join(self.root_folder, item))
-            for item in os.listdir(self.root_folder)
-        )
-        if subdirs:
-            pattern = os.path.join(self.root_folder, "**", f"*.{self.file_type}")
-            return glob.glob(pattern, recursive=True)
-        return glob.glob(os.path.join(self.root_folder, f"*.{self.file_type}"))
 
     def __len__(self):
         return self.nsamples
 
     def __getitem__(self, idx):
         if self.use_files:
-            file_path = self.file_list[idx]
-            data = self._load_file(file_path)
-            if isinstance(self.unpack_func, Callable):
-                data = self.unpack_func(data)
-            elif isinstance(self.unpack_func, str) and self.unpack_func == "dict":
-                data = unpack_func(data)
-            if isinstance(data, np.ndarray):
-                data = torch.from_numpy(data).float()
-            return data
+            return BasicDataset.__getitem__(self, idx)
         else:
             np.random.seed(RANDOM_SEED + idx)
             data = np.random.randn(*self.shape).astype(np.float32)
             return torch.from_numpy(data)
+
+

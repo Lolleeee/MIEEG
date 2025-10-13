@@ -1,15 +1,21 @@
+import glob
+import logging
 import os
+import re
+from enum import Enum
 from typing import Dict
 
 import numpy as np
+import scipy.io as sio
 from dotenv import load_dotenv
 
-from packages.data_objects.signal import EegSignal
-from packages.data_objects.dataset import FileLoader
+from packages.data_objects.signal import EegSignal, KinematicSignal
+from packages.io.file_loader import FileLoader
 from packages.io.output_packager import save_signal
-from packages.processing import misc, tensor_reshape, wavelet
-from test import debug_constants
+from packages.processing import misc, sensor_data, tensor_reshape, wavelet
+from packages.test import debug_constants
 
+from packages.plotting.napari_plots import raw_plot_spatial_eeg_tensor
 
 def main():
     load_dotenv()
@@ -18,15 +24,19 @@ def main():
 
     def unpack(input: Dict):
         eeg_data = np.array(input["trial_eeg"])
-        return eeg_data
 
-    loader = FileLoader(
-        root_folder=base_folder, yield_identifiers=True, unpack_func=unpack)
+        kin_data = np.array(input["trial_kin"])
 
-        
+        return eeg_data, kin_data
 
-    for patient, trial, eeg_data in loader:
+    file_loader = FileLoader(
+        root_folder=base_folder,
+        folder_structure="patient",
+        file_type="mat",
+        unpack_func=unpack,
+    ).load_data()
 
+    for patient, trial, (eeg_data, kin_data) in file_loader:
         EEG = EegSignal(
             unpacked_data=eeg_data,
             fs=250,
@@ -40,16 +50,22 @@ def main():
 
         EEG = misc.absolute_values(EEG)
 
+        EEG = misc.normalize_values(
+            EEG, ["channels", "time"]
+        )  # TODO should I normalize also across channels? Maybe only through time
+
         EEG = tensor_reshape.reshape_to_spatial(
             EEG, debug_constants.SPATIAL_DOMAIN_MATRIX_32
         )  # Move time axis to front
-
-        EEG = tensor_reshape.segment_signal(EEG, window=250, overlap=125)
+        
+        EEG = tensor_reshape.segment_signal(EEG, window=250, overlap=0)
 
         EEG._reorder_signal_dimensions(
             ["epochs", "frequencies", "rows", "cols", "time"]
         )
-
+        print(EEG.signal.shape)
+        raw_plot_spatial_eeg_tensor(EEG.signal)
+        break
         # KIN = KinematicSignal(unpacked_data=kin_data, fs=250, dim_dict={"position": 0, "time": 1}, patient=patient, trial=trial)
         # print(KIN.signal.shape, KIN.dim_dict)
         # KIN = sensor_data.window_delta_value(KIN, window=250//2, offset=250//2, dim='time')

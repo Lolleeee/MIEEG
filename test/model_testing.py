@@ -4,7 +4,7 @@ from pyparsing import Dict
 import torch
 
 from packages.data_objects.dataset import CustomTestDataset, Dataset
-from packages.io.input_loader import get_test_loader
+from packages.io.file_loader import get_test_loader
 
 
 from packages.plotting.reconstruction_plots import plot_reconstruction_distribution
@@ -125,7 +125,7 @@ def autoencoder_assertions(model, input, output):
 
 from packages.models.autoencoder_convnext import Conv3DAE as new_Conv3DAE
 # model = Conv3DAE(in_channels=25, embedding_dim=16, hidden_dims=[32, 48])
-model1 = new_Conv3DAE(in_channels=25, embedding_dim=16, hidden_dims=[64, 128, 256], use_convnext=False)
+model1 = new_Conv3DAE(in_channels=25, latent_dim=16, hidden_dims=[64, 128, 256], use_convnext=False)
 
 print(model1)
 

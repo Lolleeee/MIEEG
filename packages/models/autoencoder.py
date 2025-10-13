@@ -5,7 +5,7 @@ import torch.nn as nn
 
 
 class Conv3DAE(nn.Module):
-    def __init__(self, in_channels=50, embedding_dim=128):
+    def __init__(self, in_channels=50, latent_dim=128):
         """
         3D Convolutional Autoencoder for input shape [batch, 50, 7, 5, 250]
 
@@ -35,8 +35,8 @@ class Conv3DAE(nn.Module):
         self.flat_size = 256 * 2 * 2 * 63  # 64512
 
         # Bottleneck (embedding space)
-        self.fc_encoder = nn.Linear(self.flat_size, embedding_dim)
-        self.fc_decoder = nn.Linear(embedding_dim, self.flat_size)
+        self.fc_encoder = nn.Linear(self.flat_size, latent_dim)
+        self.fc_decoder = nn.Linear(latent_dim, self.flat_size)
 
         # Decoder
         self.decoder = nn.Sequential(

@@ -56,7 +56,7 @@ class Conv3DAE(nn.Module):
     def __init__(
         self, 
         in_channels=50, 
-        embedding_dim=128, 
+        latent_dim=128, 
         hidden_dims=None,
         use_convnext=False,
         convnext_expansion=4,
@@ -76,7 +76,7 @@ class Conv3DAE(nn.Module):
         super(Conv3DAE, self).__init__()
 
         self.in_channels = in_channels
-        self.embedding_dim = embedding_dim
+        self.embedding_dim = latent_dim
         self.use_convnext = use_convnext
         
         # Default hidden dimensions if not provided
@@ -149,8 +149,8 @@ class Conv3DAE(nn.Module):
         self.flat_size = hidden_dims[-1] * final_spatial[0] * final_spatial[1] * final_spatial[2]
         
         # Bottleneck (embedding space)
-        self.fc_encoder = nn.Linear(self.flat_size, embedding_dim)
-        self.fc_decoder = nn.Linear(embedding_dim, self.flat_size)
+        self.fc_encoder = nn.Linear(self.flat_size, latent_dim)
+        self.fc_decoder = nn.Linear(latent_dim, self.flat_size)
         
         # DECODER - Build dynamically (reverse of encoder)
         decoder_layers = []

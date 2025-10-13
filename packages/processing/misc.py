@@ -1,4 +1,4 @@
-from typing import List
+from typing import Dict, Iterator, List
 
 import numpy as np
 
@@ -11,7 +11,7 @@ def absolute_values(Signal: SignalObject) -> np.ndarray:
 
 
 def normalize_values(
-    Signal: SignalObject, across_dims: List[str] = None, method: str = "zscore"
+    Signal: SignalObject, across_dims: List[str] = None, method: str = "zscore", global_norm: Dict = None
 ) -> SignalObject:
     """
     Normalize signal values across specified dimensions.
@@ -27,6 +27,14 @@ def normalize_values(
     Returns:
         SignalObject with normalized signal
     """
+    if global_norm is not None:
+        mean = global_norm.get("mean")
+        std = global_norm.get("std")
+        if mean is None or std is None:
+            raise ValueError("Global normalization requires 'mean' and 'std' in global_norm dictionary.")
+        Signal.signal = (Signal.signal - mean) / (std + 1e-10)
+        return Signal
+    
     if across_dims is None:
         # Normalize across all dimensions
         axis = None
@@ -53,3 +61,20 @@ def normalize_values(
         Signal.signal = (Signal.signal - min_val) / (max_val - min_val + 1e-10)
 
     return Signal
+
+def calculate_global_normalization_params(data_loader: Iterator, ) -> Dict[str, np.ndarray]:
+    """
+    Calculate global mean and std across a dataset.
+
+    Args:
+        data_loader: Iterator yielding data
+    Returns:
+        Dictionary with global 'mean' and 'std' arrays
+    """
+
+    means = []
+    stds = []
+    for data in data_loader:
+        means.append(np.mean(data))
+        stds.append(np.std(data))
+    return {"mean": np.mean(means), "std": np.mean(stds)}

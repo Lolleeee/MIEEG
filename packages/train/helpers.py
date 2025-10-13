@@ -7,7 +7,7 @@ import torch
 
 from packages.plotting import train_plots
 
-
+# TODO integrate better with training loop updates. Make a stage like loop, like in stage initial training, during, after, late and such
 class BackupManager:
     def __init__(self, backup_interval, backup_path):
         self.backup_interval = backup_interval

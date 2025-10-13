@@ -1,11 +1,11 @@
 from packages.models.autoencoder import Conv3DAE
 from packages.train.training import train_model
-from packages.io.input_loader import get_data_loaders
+from packages.io.file_loader import get_data_loaders
 import torch
 import os
 from packages.data_objects.dataset import Dataset
 from dotenv import load_dotenv
-model = Conv3DAE(in_channels=50, embedding_dim=256)
+model = Conv3DAE(in_channels=50, latent_dim=256)
 load_dotenv()
 dataset_path = os.getenv("DATASET_PATH")
 # Dummy training loop

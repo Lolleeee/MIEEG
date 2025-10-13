@@ -39,7 +39,7 @@ def _check_precision(model, *data_loaders):
             break  # No need to check further batches
     return model
 
-
+# TODO Have it a separate module maybe?
 class TaskHandler:
     def __init__(self, loader = None, metrics = None, batch_size = None):
 
@@ -119,6 +119,7 @@ def _eval_loop(model, val_loader, loss_criterion, device, history, task_handler:
     history.log_val(val_loss, task_handler.evals)
     return val_loss
 
+# TODO Test this function
 def test_model(model, test_loader, loss_func, metrics: Dict[str, Callable], device):
     model.eval()
     test_loss = 0.0
@@ -138,6 +139,7 @@ def test_model(model, test_loader, loss_func, metrics: Dict[str, Callable], devi
         logging.info(f"Test {metric_name}: {metric_value:.4f}")
     return test_loss
 
+# TODO Make this into a class and handle all config options, would be nice to do .train() on it
 def train_model(model, train_loader, val_loader, loss_criterion, optimizer, metrics: Dict[str, Callable] = None, config=TRAIN_CONFIG):
     """
     Main train model function, 
@@ -184,14 +186,15 @@ def train_model(model, train_loader, val_loader, loss_criterion, optimizer, metr
             val_loss = _eval_loop(model, val_loader, loss_criterion, device, history, task_handler)
 
             helper_handler._update_helpers(model, epoch, val_loss)
-
-            if helper_handler.early_stopper.early_stop:
+            if helper_handler.early_stopper is not None and helper_handler.early_stopper.early_stop:
                 break
             Epochpbar.update()
 
     history.plot_history()
     return model
     
+
+# TODO Move this into Helpers module
 class HelperHandler:
     def __init__(self, config, optimizer):
         self.backup_manager = None
