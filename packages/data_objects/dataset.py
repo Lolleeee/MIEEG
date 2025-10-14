@@ -179,6 +179,7 @@ class TorchDataset(Dataset, BasicDataset):
         
         try:
             item = (item - mean) / (std + eps)
+            item = item.clamp(-5, 5)
             return item
         except Exception as e:
             raise ValueError(f"Error normalizing data: {e}")

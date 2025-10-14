@@ -71,4 +71,5 @@ class Conv3DAE(nn.Module):
         """Full forward pass through autoencoder"""
         embedding = self.encode(x)
         reconstruction = self.decode(embedding)
+
         return reconstruction
