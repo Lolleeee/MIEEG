@@ -42,7 +42,6 @@ class CustomMSELoss(torch.nn.Module):
     def forward(self, outputs, inputs):
         
         outputs = outputs[0]
-        
         loss = self.mse_loss(outputs, inputs)
 
         return loss

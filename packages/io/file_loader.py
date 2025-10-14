@@ -125,7 +125,7 @@ def get_data_loaders(
         
         mean, std = _calc_norm_params(temp_train_loader, axes=norm_axes)
 
-        dataset._norm_params = (mean, std)
+        dataset._norm_params = (mean.to(dataset.precision), std.to(dataset.precision))
     train_dataset = Subset(dataset, train_idx)
     val_dataset = Subset(dataset, val_idx)
     test_dataset = Subset(dataset, test_idx)

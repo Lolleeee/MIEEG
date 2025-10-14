@@ -74,9 +74,9 @@ class BasicDataset():
                 unpacked_data = packed_data
 
             if isinstance(unpacked_data, np.ndarray):
-                    return torch.from_numpy(unpacked_data).to(self.precision)
+                    return torch.from_numpy(unpacked_data)
 
-            return unpacked_data
+            return unpacked_data.to(self.precision)
         except Exception as e:
             raise TypeError(f"Error loading {item_path}: {e}")
 
@@ -158,25 +158,32 @@ class TorchDataset(Dataset, BasicDataset):
         self,
         root_folder: str,
         unpack_func: Union[Callable[[Any], Any], str] = None,
+        precision: torch.dtype = torch.float16,
     ):
-        BasicDataset.__init__(self, root_folder, unpack_func, precision=torch.float16)
+        BasicDataset.__init__(self, root_folder, unpack_func, precision=precision)
         self._norm_params = None
-        self.precision = torch.float16
+        
     def __getitem__(self, idx):
         data = BasicDataset.__getitem__(self, idx)
         if isinstance(data, np.ndarray):
-            data = torch.from_numpy(data).float()
+            data = torch.from_numpy(data).to(self.precision)
+        elif isinstance(data, torch.Tensor):
+            data = data.to(self.precision)
 
         if self._norm_params is not None:
-           data = self._normalize_item(data)
+            data = self._normalize_item(data)
 
-        return data.to(self.precision)
+        return data
 
     def _normalize_item(self, item):
-        mean = self._norm_params[0]
-        std = self._norm_params[1]
+        mean = self._norm_params[0].to(item.dtype)  
+        std = self._norm_params[1].to(item.dtype)   
+        
+        # Use appropriate epsilon for float16
+        eps = 1e-5 if item.dtype == torch.float16 else 1e-10
+        
         try:
-            item = (item - mean) / (std + 1e-10)
+            item = (item - mean) / (std + eps)
             return item
         except Exception as e:
             raise ValueError(f"Error normalizing data: {e}")
@@ -187,9 +194,10 @@ class CustomTestDataset(Dataset, BasicDataset):
         root_folder: str = None,
         unpack_func: Union[Callable[[Any], Any], str] = general_unpack_func,
         nsamples: int = 10,
-        shape: tuple = (25, 7, 5, 250)
+        shape: tuple = (25, 7, 5, 250),
+        precision: torch.dtype = torch.float16,
     ):  
-        BasicDataset.__init__(self, root_folder, unpack_func)
+        BasicDataset.__init__(self, root_folder, unpack_func, precision=precision)
         self.nsamples = nsamples
         self.shape = shape
         
@@ -213,6 +221,6 @@ class CustomTestDataset(Dataset, BasicDataset):
         else:
             np.random.seed(RANDOM_SEED + idx)
             data = np.random.randn(*self.shape).astype(np.float32)
-            return torch.from_numpy(data).to(torch.float16)
+            return torch.from_numpy(data).to(self.precision)  
 
 
