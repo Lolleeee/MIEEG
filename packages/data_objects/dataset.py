@@ -176,9 +176,8 @@ class TorchDataset(Dataset, BasicDataset):
         return data
 
     def _normalize_item(self, item):
-        mean = self._norm_params[0].to(item.dtype)  
-        std = self._norm_params[1].to(item.dtype)   
-        
+        mean = self._norm_params[0]  
+        std = self._norm_params[1]   
         # Use appropriate epsilon for float16
         eps = 1e-5 if item.dtype == torch.float16 else 1e-10
         
@@ -200,6 +199,7 @@ class CustomTestDataset(Dataset, BasicDataset):
         BasicDataset.__init__(self, root_folder, unpack_func, precision=precision)
         self.nsamples = nsamples
         self.shape = shape
+        
         
 
         if self.root_folder is not None and os.path.isdir(self.root_folder):
