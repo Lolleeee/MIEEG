@@ -34,3 +34,16 @@ class VaeLoss:
 
         return recon_loss + self.beta * kld
     
+class CustomMSELoss(torch.nn.Module):
+    def __init__(self):
+        super(CustomMSELoss, self).__init__()
+        self.mse_loss = torch.nn.MSELoss()
+
+    def forward(self, outputs, inputs):
+        
+        outputs = outputs[0]
+        
+        loss = self.mse_loss(outputs, inputs)
+
+        return loss
+    

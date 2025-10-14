@@ -45,9 +45,10 @@ def general_unpack_func(data: Dict[str, Any]) -> Any:
         return data
 
 class BasicDataset():
-    def __init__(self, root_folder: str, unpack_func: Callable[[Any], Any] = None):
+    def __init__(self, root_folder: str, unpack_func: Callable[[Any], Any] = None, precision: torch.dtype = torch.float16):
 
         self.root_folder = root_folder
+        self.precision = precision
 
         if unpack_func is None:
             self.unpack_func = general_unpack_func
@@ -72,6 +73,8 @@ class BasicDataset():
             else:
                 unpacked_data = packed_data
 
+            if isinstance(unpacked_data, np.ndarray):
+                    return torch.from_numpy(unpacked_data).to(self.precision)
 
             return unpacked_data
         except Exception as e:
@@ -156,9 +159,9 @@ class TorchDataset(Dataset, BasicDataset):
         root_folder: str,
         unpack_func: Union[Callable[[Any], Any], str] = None,
     ):
-        BasicDataset.__init__(self, root_folder, unpack_func)
+        BasicDataset.__init__(self, root_folder, unpack_func, precision=torch.float16)
         self._norm_params = None
-
+        self.precision = torch.float16
     def __getitem__(self, idx):
         data = BasicDataset.__getitem__(self, idx)
         if isinstance(data, np.ndarray):
@@ -166,9 +169,9 @@ class TorchDataset(Dataset, BasicDataset):
 
         if self._norm_params is not None:
            data = self._normalize_item(data)
-        
-        return data
-    
+
+        return data.to(self.precision)
+
     def _normalize_item(self, item):
         mean = self._norm_params[0]
         std = self._norm_params[1]
@@ -210,6 +213,6 @@ class CustomTestDataset(Dataset, BasicDataset):
         else:
             np.random.seed(RANDOM_SEED + idx)
             data = np.random.randn(*self.shape).astype(np.float32)
-            return torch.from_numpy(data)
+            return torch.from_numpy(data).to(torch.float16)
 
 
