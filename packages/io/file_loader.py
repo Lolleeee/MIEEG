@@ -33,7 +33,7 @@ def _get_set_sizes(sets_size, dataset, indices):
 
     return train_idx, val_idx, test_idx
 
-def _calc_norm_params(train_loader, axes):
+def _calc_norm_params(train_loader, axes, winsorize=None):
     """
     Calculate global mean and std using batched Welford's algorithm.
     Faster and more memory efficient.
@@ -51,7 +51,7 @@ def _calc_norm_params(train_loader, axes):
         
         if isinstance(batch, np.ndarray):
             batch = torch.from_numpy(batch)
-            
+
         batch_size = batch.size(0)
         if item_shape is None:
             item_shape = batch.shape[0:]
@@ -94,6 +94,7 @@ def _calc_norm_params(train_loader, axes):
 
     mean = mean.view(*reshape_dims)
     std = std.view(*reshape_dims)
+
     return mean, std
 
 
@@ -104,6 +105,7 @@ def get_data_loaders(
     sets_size: dict = {"train": 0.6, "val": 0.2, "test": 0.2},
     num_workers: int = 4,
     norm_axes: Tuple[int] = None,
+    winsorize: Tuple[float] = (0.01, 0.99),
 ) -> DataLoader:
     
     indices = np.arange(len(dataset))
@@ -120,8 +122,8 @@ def get_data_loaders(
             batch_size=batch_size,
             num_workers=num_workers,
         )
-        
-        mean, std = _calc_norm_params(temp_train_loader, axes=norm_axes)
+
+        mean, std = _calc_norm_params(temp_train_loader, axes=norm_axes, winsorize=winsorize)
 
         dataset._norm_params = (mean, std)
 
