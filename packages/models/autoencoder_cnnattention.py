@@ -63,7 +63,7 @@ class SpatialTransposedCNN(nn.Module):
             self.deconv1 = nn.ConvTranspose3d(
                 hidden_channels[0], hidden_channels[1],  # FIXED: Was [-1], [-2]
                 kernel_size=3, stride=(2, 2, 1), padding=1, 
-                output_padding=(1, 0, 0)
+                output_padding=(0, 0, 0)
             )
             self.norm1 = nn.BatchNorm3d(hidden_channels[1]) if normalization == 'batch' \
                          else nn.GroupNorm(min(8, hidden_channels[1]), hidden_channels[1])
