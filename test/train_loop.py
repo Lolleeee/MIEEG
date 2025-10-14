@@ -30,7 +30,8 @@ config = {
     # 'EarlyStopping' : {'patience': 10000, 'min_delta': 0.0},
     # 'BackupManager': {'backup_interval': 100000, 'backup_path': './model_backups'},
     # 'ReduceLROnPlateau': {'patience': 25, 'factor': 0.5},
-    'history_plot': {'plot_type': 'extended', 'save_path': './training_history'}
+    'history_plot': {'plot_type': 'extended', 'save_path': './training_history'},
+    'grad_clip': 1.0
 }
 
 metrics = {}

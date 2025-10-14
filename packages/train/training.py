@@ -81,7 +81,7 @@ def _setup_model(model):
     model.to(device)
     return model, device
 
-def _train_loop(model, train_loader, loss_criterion, optimizer, device, history, task_handler: TaskHandler):
+def _train_loop(model, train_loader, loss_criterion, optimizer, device, history, task_handler: TaskHandler, grad_clip=None):
     
     model.train()
     train_loss = 0.0
@@ -96,6 +96,12 @@ def _train_loop(model, train_loader, loss_criterion, optimizer, device, history,
                 outputs, loss = task_handler.process(loss_criterion, model, batch)
 
             scaler.scale(loss).backward()
+
+            if grad_clip is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
+
+
             scaler.step(optimizer)
             scaler.update()
             train_loss += loss.item() * batch.size(0)
@@ -152,6 +158,8 @@ def train_model(model, train_loader, val_loader, loss_criterion, optimizer, metr
     batch_size = config.get('batch_size', TRAIN_CONFIG['batch_size'])
     lr = config.get('lr', TRAIN_CONFIG['lr'])
     weight_decay = config.get('weight_decay', TRAIN_CONFIG['weight_decay'])
+    grad_clip = config.get('grad_clip', None)  # Get gradient clipping value
+
 
 
     if 'history_plot' in config:
@@ -184,7 +192,7 @@ def train_model(model, train_loader, val_loader, loss_criterion, optimizer, metr
 
             task_handler._reset_metrics()
 
-            _train_loop(model, train_loader, loss_criterion, optimizer, device, history, task_handler)
+            _train_loop(model, train_loader, loss_criterion, optimizer, device, history, task_handler, grad_clip)
 
             val_loss = _eval_loop(model, val_loader, loss_criterion, device, history, task_handler)
 
