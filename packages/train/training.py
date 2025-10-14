@@ -5,7 +5,8 @@ from tqdm.notebook import tqdm
 from packages.train.helpers import EarlyStopping, BackupManager, History, NoOpHistory
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from typing import Callable, Dict, List
-
+from torch.amp.grad_scaler import GradScaler
+scaler = GradScaler()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,16 +35,14 @@ def _check_precision(model, *data_loaders):
     for dataloader in data_loaders:
         batch = next(iter(dataloader))
         if batch.dtype != model_dtype:
-            logging.warning(f"DataLoader dtype {batch.dtype} does not match model dtype {model_dtype}. Converting model to {batch.dtype}.")
-            model = model.to(batch.dtype)
+            logging.warning(f"DataLoader dtype {batch.dtype} does not match model dtype {model_dtype}.")
             break  # No need to check further batches
     return model
 
 # TODO Have it a separate module maybe?
 class TaskHandler:
-    def __init__(self, loader = None, metrics = None, batch_size = None):
-
-        self.batch_size = batch_size
+    def __init__(self, loader = None, metrics = None):
+        
         self.loader = loader
 
         self.metrics = metrics if metrics is not None else {}
@@ -51,13 +50,13 @@ class TaskHandler:
         self._reset_metrics()
     
     def process(self, loss_criterion, model, batch):
-        
-        outputs = model(batch)
-        loss = loss_criterion(outputs, batch)
 
-        self._eval_metrics(outputs, batch)
+            outputs = model(batch)
+            loss = loss_criterion(outputs, batch)
+            
+            self._eval_metrics(outputs, batch)
 
-        return outputs, loss
+            return outputs, loss
     
     def _eval_metrics(self, outputs, batch):  
 
@@ -65,7 +64,7 @@ class TaskHandler:
 
         for metric_name, metric_func in self.metrics.items():
             eval = metric_func(outputs, batch)
-            self.evals[metric_name] += eval * self.batch_size
+            self.evals[metric_name] += eval * batch.size(0)
 
     def _reset_metrics(self):
         self.evals = {metric_name: 0.0 for metric_name in self.metrics}
@@ -89,13 +88,17 @@ def _train_loop(model, train_loader, loss_criterion, optimizer, device, history,
 
     with tqdm(desc="Training Batches", total=len(train_loader), position=1, leave=True) as batchpbar:
         for batch in train_loader:
-                
+            
             batch = batch.to(device)
             optimizer.zero_grad()
-            outputs, loss = task_handler.process(loss_criterion, model, batch)
-            loss.backward()
-            optimizer.step()
-            train_loss += loss.item() * train_loader.batch_size
+
+            with torch.autocast(device_type=device.type):
+                outputs, loss = task_handler.process(loss_criterion, model, batch)
+
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+            train_loss += loss.item() * batch.size(0)
             batchpbar.update()
 
         train_loss /= len(train_loader.dataset)
@@ -113,7 +116,7 @@ def _eval_loop(model, val_loader, loss_criterion, device, history, task_handler:
         for batch in val_loader:
             batch = batch.to(device)
             outputs, loss = task_handler.process(loss_criterion, model, batch)
-            val_loss += loss.item() * val_loader.batch_size
+            val_loss += loss.item() * batch.size(0)
     val_loss /= len(val_loader.dataset)
     task_handler._end_epoch(len(val_loader.dataset))
     history.log_val(val_loss, task_handler.evals)
@@ -129,7 +132,7 @@ def test_model(model, test_loader, loss_func, metrics: Dict[str, Callable], devi
             batch = batch.to(device)
             outputs = model(batch)
             loss = loss_func(outputs, batch)
-            test_loss += loss.item() * test_loader.batch_size
+            test_loss += loss.item() * batch.size(0)
             for metric_name, metric_func in metrics.items():
                 metric_eval[metric_name] += metric_func(outputs, batch)
 
@@ -174,7 +177,7 @@ def train_model(model, train_loader, val_loader, loss_criterion, optimizer, metr
 
     helper_handler = HelperHandler(config, optimizer)
 
-    task_handler = TaskHandler(loader=train_loader, metrics=metrics, batch_size=batch_size)
+    task_handler = TaskHandler(loader=train_loader, metrics=metrics)
 
     with tqdm(desc="Epochs", total=epochs, position=1, leave=True) as Epochpbar:
         for epoch in range(epochs):

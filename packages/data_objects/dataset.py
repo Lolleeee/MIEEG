@@ -45,10 +45,9 @@ def general_unpack_func(data: Dict[str, Any]) -> Any:
         return data
 
 class BasicDataset():
-    def __init__(self, root_folder: str, unpack_func: Callable[[Any], Any] = None, precision: torch.dtype = torch.float16):
+    def __init__(self, root_folder: str, unpack_func: Callable[[Any], Any] = None):
 
         self.root_folder = root_folder
-        self.precision = precision
 
         if unpack_func is None:
             self.unpack_func = general_unpack_func
@@ -74,9 +73,9 @@ class BasicDataset():
                 unpacked_data = packed_data
 
             if isinstance(unpacked_data, np.ndarray):
-                    return torch.from_numpy(unpacked_data)
+                    unpacked_data = torch.from_numpy(unpacked_data)
 
-            return unpacked_data.to(self.precision)
+            return unpacked_data.float()
         except Exception as e:
             raise TypeError(f"Error loading {item_path}: {e}")
 
@@ -158,17 +157,14 @@ class TorchDataset(Dataset, BasicDataset):
         self,
         root_folder: str,
         unpack_func: Union[Callable[[Any], Any], str] = None,
-        precision: torch.dtype = torch.float16,
     ):
-        BasicDataset.__init__(self, root_folder, unpack_func, precision=precision)
+        BasicDataset.__init__(self, root_folder, unpack_func)
         self._norm_params = None
         
     def __getitem__(self, idx):
         data = BasicDataset.__getitem__(self, idx)
         if isinstance(data, np.ndarray):
-            data = torch.from_numpy(data).to(self.precision)
-        elif isinstance(data, torch.Tensor):
-            data = data.to(self.precision)
+            data = torch.from_numpy(data)
 
         if self._norm_params is not None:
             data = self._normalize_item(data)
@@ -194,9 +190,8 @@ class CustomTestDataset(Dataset, BasicDataset):
         unpack_func: Union[Callable[[Any], Any], str] = general_unpack_func,
         nsamples: int = 10,
         shape: tuple = (25, 7, 5, 250),
-        precision: torch.dtype = torch.float16,
     ):  
-        BasicDataset.__init__(self, root_folder, unpack_func, precision=precision)
+        BasicDataset.__init__(self, root_folder, unpack_func)
         self.nsamples = nsamples
         self.shape = shape
         
@@ -221,6 +216,6 @@ class CustomTestDataset(Dataset, BasicDataset):
         else:
             np.random.seed(RANDOM_SEED + idx)
             data = np.random.randn(*self.shape).astype(np.float32)
-            return torch.from_numpy(data).to(self.precision)  
+            return torch.from_numpy(data)
 
 

@@ -44,7 +44,6 @@ def _calc_norm_params(train_loader, axes):
     n = 0
     mean = None
     M2 = None
-    # Ensure calculations are in float32 to avoid precision issues
     for batch in tqdm(train_loader, desc="Calculating global parameters"):
         # Handle tuple outputs
         if isinstance(batch, (list, tuple)):
@@ -52,7 +51,7 @@ def _calc_norm_params(train_loader, axes):
         
         if isinstance(batch, np.ndarray):
             batch = torch.from_numpy(batch)
-        batch = batch.float()
+            
         batch_size = batch.size(0)
         if item_shape is None:
             item_shape = batch.shape[0:]
@@ -123,8 +122,8 @@ def get_data_loaders(
         )
         
         mean, std = _calc_norm_params(temp_train_loader, axes=norm_axes)
-        
-        dataset._norm_params = (mean.to(dataset.precision), std.to(dataset.precision))
+
+        dataset._norm_params = (mean, std)
 
     train_dataset = Subset(dataset, train_idx)
     val_dataset = Subset(dataset, val_idx)
