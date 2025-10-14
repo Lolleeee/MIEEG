@@ -41,6 +41,7 @@ dataset = TorchDataset(root_folder=dataset_path, precision=torch.float16)
 
 
 train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.75, 'val': 0.25, 'test': 0}, norm_axes=(0,2,3,4))
+
 os.abort()
 print("\nStarting dummy training loop...")
 

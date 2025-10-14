@@ -72,7 +72,6 @@ def _calc_norm_params(train_loader, axes):
             mean = (n * mean + batch_size * batch_mean) / new_n
             M2 = M2 + batch_var * batch_size + delta ** 2 * n * batch_size / new_n
             n = new_n
-        print(f"Intermediate mean float32: {mean.flatten()}")
     if n < 2:
         return mean, torch.zeros_like(mean)
     
@@ -124,9 +123,9 @@ def get_data_loaders(
         )
         
         mean, std = _calc_norm_params(temp_train_loader, axes=norm_axes)
-        print(f"Calculated mean float32: {mean.flatten()}")
+        
         dataset._norm_params = (mean.to(dataset.precision), std.to(dataset.precision))
-        print("in dataset params", dataset._norm_params[0].flatten(), dataset._norm_params[1].flatten())
+
     train_dataset = Subset(dataset, train_idx)
     val_dataset = Subset(dataset, val_idx)
     test_dataset = Subset(dataset, test_idx)
