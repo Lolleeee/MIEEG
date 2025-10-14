@@ -1,4 +1,4 @@
-from typing import Union
+from typing import List, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -101,4 +101,65 @@ def plot_reconstruction_scatter(
     plt.legend()
     plt.axis("equal")
     plt.grid(True)
+    plt.show()
+
+
+def plot_reconstruction_slices(
+    original: Union[np.ndarray, torch.Tensor],
+    reconstructed: Union[np.ndarray, torch.Tensor], freqs: List[int] = None
+) -> None:
+    """
+    Plots slices of the original and reconstructed 4D signals for visual comparison.
+    Concats the second and third dimensions which correspond to EEG channels.
+    Selects 3 indexes in the middle of the frequency (first) dimension like [11, 12, 13].
+    Then for 4 random channels the reconstruction vs the original is plotted.
+    """
+    if isinstance(original, torch.Tensor):
+        original = original.cpu().detach().numpy()
+    if isinstance(reconstructed, torch.Tensor):
+        reconstructed = reconstructed.cpu().detach().numpy()
+    assert original.shape == reconstructed.shape, "Original and reconstructed shapes must match."
+    assert len(original.shape) == 4, "Input data must be 4D (freq, channels, channels, time)."
+    freq_dim, ch1_dim, ch2_dim, time_dim = original.shape
+    if freqs is not None:
+        assert all(0 <= f < freq_dim for f in freqs), "Frequency indices out of bounds."
+        freq_indices = freqs
+    else:
+        mid_freq = freq_dim // 2
+        freq_indices = [mid_freq - 1, mid_freq, mid_freq + 1]
+    combined_original = original[:, :, :, :].reshape(freq_dim, ch1_dim * ch2_dim, time_dim)
+    combined_reconstructed = reconstructed[:, :, :, :].reshape(freq_dim, ch1_dim * ch2_dim, time_dim)
+    random_channels = np.random.choice(ch1_dim * ch2_dim, size=4, replace=False)
+    plt.figure(figsize=(15, 10))
+    for i, ch in enumerate(random_channels):
+        plt.subplot(4, 3, i * 3 + 1)
+        plt.plot(combined_original[freq_indices[0], ch, :], label="Original", color="blue")
+        plt.plot(combined_reconstructed[freq_indices[0], ch, :], label="Reconstructed", color="orange", alpha=0.7)
+        plt.title(f"Channel {ch} - Frequency Index {freq_indices[0]}")
+        plt.xlabel("Time")
+        plt.ylabel("Amplitude")
+        if i == 0:
+            plt.legend()
+        plt.grid(True)
+
+        plt.subplot(4, 3, i * 3 + 2)
+        plt.plot(combined_original[freq_indices[1], ch, :], label="Original", color="blue")
+        plt.plot(combined_reconstructed[freq_indices[1], ch, :], label="Reconstructed", color="orange", alpha=0.7)
+        plt.title(f"Channel {ch} - Frequency Index {freq_indices[1]}")
+        plt.xlabel("Time")
+        plt.ylabel("Amplitude")
+        if i == 0:
+            plt.legend()
+        plt.grid(True)
+
+        plt.subplot(4, 3, i * 3 + 3)
+        plt.plot(combined_original[freq_indices[2], ch, :], label="Original", color="blue")
+        plt.plot(combined_reconstructed[freq_indices[2], ch, :], label="Reconstructed", color="orange", alpha=0.7)
+        plt.title(f"Channel {ch} - Frequency Index {freq_indices[2]}")
+        plt.xlabel("Time")
+        plt.ylabel("Amplitude")
+        if i == 0:
+            plt.legend()
+        plt.grid(True)
+    plt.tight_layout()
     plt.show()

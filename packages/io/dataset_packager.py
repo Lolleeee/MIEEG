@@ -104,4 +104,4 @@ def _cut_zip(out_folder, testset_path=None, testset_others=False):
     logging.info(f"Subset saved and zipped at {archive_path}.zip")
 
 if __name__ == "__main__":
-    get_subset(sample_ratio=0.8, testset_others=True)
+    get_subset(sample_ratio=0.5, testset_others=True, base_folder="/media/lolly/Bruh/WAYEEGGAL_dataset/WAYEEG_Autoencoder", out_folder="/media/lolly/Bruh/WAYEEGGAL_dataset/0.4subset_data", patient_structure=False)
