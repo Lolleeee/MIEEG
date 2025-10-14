@@ -79,7 +79,6 @@ def _calc_norm_params(train_loader, axes):
     variance = M2 / n
     std = torch.sqrt(variance)
 
-
     
     item_ndim = len(item_shape)
     reshape_dims = []
@@ -125,6 +124,7 @@ def get_data_loaders(
         )
         
         mean, std = _calc_norm_params(temp_train_loader, axes=norm_axes)
+
         dataset._norm_params = (mean, std)
     train_dataset = Subset(dataset, train_idx)
     val_dataset = Subset(dataset, val_idx)

@@ -104,4 +104,4 @@ def _cut_zip(out_folder, testset_path=None, testset_others=False):
     logging.info(f"Subset saved and zipped at {archive_path}.zip")
 
 if __name__ == "__main__":
-    get_subset(sample_ratio=0.7, testset_others=True)
+    get_subset(sample_ratio=0.8, testset_others=True)

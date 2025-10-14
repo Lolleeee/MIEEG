@@ -1,7 +1,7 @@
 import sys
 import torch
 import logging
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 from packages.train.helpers import EarlyStopping, BackupManager, History, NoOpHistory
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from typing import Callable, Dict, List
@@ -176,7 +176,7 @@ def train_model(model, train_loader, val_loader, loss_criterion, optimizer, metr
 
     task_handler = TaskHandler(loader=train_loader, metrics=metrics, batch_size=batch_size)
 
-    with tqdm(desc="Epochs", total=epochs, position=0, leave=True) as Epochpbar:
+    with tqdm(desc="Epochs", total=epochs, position=1, leave=True) as Epochpbar:
         for epoch in range(epochs):
 
             task_handler._reset_metrics()
