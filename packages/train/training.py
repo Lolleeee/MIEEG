@@ -83,7 +83,7 @@ def _setup_model(model):
     return model, device
 
 def _train_loop(model, train_loader, loss_criterion, optimizer, device, history, task_handler: TaskHandler):
-
+    print(tqdm.__module__)
     model.train()
     train_loss = 0.0
 
