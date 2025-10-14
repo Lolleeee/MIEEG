@@ -61,17 +61,17 @@ class SpatialTransposedCNN(nn.Module):
         
         if len(hidden_channels) > 1:
             self.deconv1 = nn.ConvTranspose3d(
-                hidden_channels[-1], hidden_channels[-2],
+                hidden_channels[0], hidden_channels[1],  # FIXED: Was [-1], [-2]
                 kernel_size=3, stride=(2, 2, 1), padding=1, 
                 output_padding=(1, 0, 0)
             )
-            self.norm1 = nn.BatchNorm3d(hidden_channels[-2]) if normalization == 'batch' \
-                         else nn.GroupNorm(min(8, hidden_channels[-2]), hidden_channels[-2])
+            self.norm1 = nn.BatchNorm3d(hidden_channels[1]) if normalization == 'batch' \
+                         else nn.GroupNorm(min(8, hidden_channels[1]), hidden_channels[1])
             self.has_deconv1 = True
-            next_in_ch = hidden_channels[-2]
+            next_in_ch = hidden_channels[1]  # FIXED: Was [-2]
         else:
             self.has_deconv1 = False
-            next_in_ch = hidden_channels[-1]
+            next_in_ch = hidden_channels[0]  # FIXED: Was [-1]
         
         self.deconv2 = nn.Conv3d(next_in_ch, out_channels, 
                                  kernel_size=3, stride=1, padding=1)
@@ -84,6 +84,7 @@ class SpatialTransposedCNN(nn.Module):
         
         x = self.deconv2(x)  # [B, 50, 7, 5, 250]
         return x
+
 
 
 class CNNTTAE(nn.Module):
@@ -342,3 +343,10 @@ if __name__ == "__main__":
         input_shape=(7, 5, 250)
     )
     print(model.count_parameters())
+
+    # Test with dummy data
+    x = torch.randn(2, 50, 7, 5, 250)  # Batch of 2 samples
+    recon, embed = model(x)
+    print("Input shape:", x.shape)
+    print("Reconstruction shape:", recon.shape)
+    print("Embedding shape:", embed.shape)
