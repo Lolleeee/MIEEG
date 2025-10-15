@@ -3,7 +3,7 @@ import numpy as np
 from packages.plotting.reconstruction_plots import plot_reconstruction_slices, plot_reconstruction_scatter, plot_reconstruction_distribution
 
 def autoencoder_test_plots(model, loader, nsamples=5):
-    outputs = torch.tensor([]).to(inputs.device)
+    outputs = torch.tensor([]).to(next(model.parameters()).device)
     for inputs in loader:
         if inputs.shape[0] > nsamples:
             inputs = inputs[:nsamples, ...]
