@@ -46,13 +46,14 @@ def mask_outputs(x, matrix):
     return x
 
 class CustomMSELoss(torch.nn.Module):
-    def __init__(self, emb_loss=0, masked: bool = False, matrix=None):
+    def __init__(self, emb_loss=0, masked: bool = False, matrix=None, scale = 1.0):
         super(CustomMSELoss, self).__init__()
         self.mse_loss = torch.nn.MSELoss()
         self.emb_loss = emb_loss
         self.masked = masked
         self.matrix = matrix
-
+        self.scale = scale
+        
     def forward(self, outputs, inputs):
         if isinstance(outputs, tuple):
             reconstruction = outputs[0]  
@@ -73,8 +74,8 @@ class CustomMSELoss(torch.nn.Module):
         if torch.isnan(loss):
             print(outputs, inputs)
             sys.exit(0)
-            
-        return loss
+
+        return loss * self.scale
 
 
 

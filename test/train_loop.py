@@ -33,6 +33,8 @@ config = {
     'grad_clip': 1.0,
     'use_amp': False,
     'grad_logging_interval': 10,
+    'asym_lr': [{'params': model.encoder.parameters(), 'lr': 1e-4},
+                {'params': model.decoder.parameters(), 'lr': 1e-3}]
 }
 
 metrics = {}

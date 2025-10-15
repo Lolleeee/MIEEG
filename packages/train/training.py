@@ -38,6 +38,25 @@ def _check_precision(model, *data_loaders):
             break  # No need to check further batches
     return model
 
+def _optimizer_setup(optimizer_class, config, model):
+    lr = config.get('lr', TRAIN_CONFIG['lr'])
+    weight_decay = config.get('weight_decay', TRAIN_CONFIG['weight_decay'])
+    asym_lr = config.get('asym_lr', None)
+    
+    if asym_lr is not None:
+        if isinstance(asym_lr, list) and all(isinstance(item, dict) for item in asym_lr):
+            for item in asym_lr:
+                if 'params' not in item or 'lr' not in item:
+                    raise KeyError("Each item in asym_lr must contain 'params' and 'lr' keys.")
+        else:
+            raise TypeError("asym_lr should be a list of dictionaries with 'params' and 'lr' keys.")
+        
+        optimizer = optimizer_class(asym_lr, weight_decay=weight_decay)
+    else:
+        optimizer = optimizer_class(model.parameters(), lr=lr, weight_decay=weight_decay)
+
+    return optimizer
+
 # TODO Have it a separate module maybe?
 class TaskHandler:
     def __init__(self, loader = None, metrics = None):
@@ -159,6 +178,7 @@ def train_model(model, train_loader, val_loader, loss_criterion, optimizer, metr
     epochs = config.get('epochs')
     batch_size = config.get('batch_size', TRAIN_CONFIG['batch_size'])
     lr = config.get('lr', TRAIN_CONFIG['lr'])
+    asym_lr = config.get('asym_lr', None)
     weight_decay = config.get('weight_decay', TRAIN_CONFIG['weight_decay'])
     grad_clip = config.get('grad_clip', None)  # Get gradient clipping value
     use_amp = config.get('use_amp', False)  # Get AMP setting
@@ -176,7 +196,7 @@ def train_model(model, train_loader, val_loader, loss_criterion, optimizer, metr
 
     model = _check_precision(model, train_loader, val_loader)
 
-    optimizer = optimizer(model.parameters(), lr=lr, weight_decay=weight_decay)
+    optimizer = _optimizer_setup(optimizer, config, model)
 
     # Convert loss criterion and metrics to instances if they are not already
     if isinstance(loss_criterion, type): 
