@@ -80,7 +80,7 @@ def _setup_model(model):
     model.to(device)
     return model, device
 
-def _train_loop(model, train_loader, loss_criterion, optimizer, device, history, task_handler: TaskHandler, grad_clip=None, use_amp=False, gradient_logger_interval):
+def _train_loop(model, train_loader, loss_criterion, optimizer, device, history, task_handler: TaskHandler, grad_clip, use_amp, gradient_logger_interval):
     
     model.train()
     train_loss = 0.0
