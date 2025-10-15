@@ -31,7 +31,8 @@ config = {
     # 'BackupManager': {'backup_interval': 100000, 'backup_path': './model_backups'},
     # 'ReduceLROnPlateau': {'patience': 25, 'factor': 0.5},
     'history_plot': {'plot_type': 'extended', 'save_path': './training_history'},
-    'grad_clip': 1.0
+    'grad_clip': 1.0,
+    'use_amp': False
 }
 
 metrics = {}

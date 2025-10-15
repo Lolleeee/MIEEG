@@ -6,7 +6,6 @@ from packages.train.helpers import EarlyStopping, BackupManager, History, NoOpHi
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from typing import Callable, Dict, List
 from torch.amp.grad_scaler import GradScaler
-scaler = GradScaler()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -81,10 +80,12 @@ def _setup_model(model):
     model.to(device)
     return model, device
 
-def _train_loop(model, train_loader, loss_criterion, optimizer, device, history, task_handler: TaskHandler, grad_clip=None):
+def _train_loop(model, train_loader, loss_criterion, optimizer, device, history, task_handler: TaskHandler, grad_clip=None, use_amp=False):
     
     model.train()
     train_loss = 0.0
+
+    scaler = GradScaler(enabled=use_amp)
 
     with tqdm(desc="Training Batches", total=len(train_loader), position=1, leave=True) as batchpbar:
         for batch in train_loader:
@@ -92,7 +93,7 @@ def _train_loop(model, train_loader, loss_criterion, optimizer, device, history,
             batch = batch.to(device)
             optimizer.zero_grad()
 
-            with torch.autocast(device_type=device.type):
+            with torch.autocast(device_type=device.type, enabled=use_amp):
                 outputs, loss = task_handler.process(loss_criterion, model, batch)
 
             scaler.scale(loss).backward()
@@ -159,6 +160,7 @@ def train_model(model, train_loader, val_loader, loss_criterion, optimizer, metr
     lr = config.get('lr', TRAIN_CONFIG['lr'])
     weight_decay = config.get('weight_decay', TRAIN_CONFIG['weight_decay'])
     grad_clip = config.get('grad_clip', None)  # Get gradient clipping value
+    use_amp = config.get('use_amp', False)  # Get AMP setting
 
 
 
@@ -192,7 +194,7 @@ def train_model(model, train_loader, val_loader, loss_criterion, optimizer, metr
 
             task_handler._reset_metrics()
 
-            _train_loop(model, train_loader, loss_criterion, optimizer, device, history, task_handler, grad_clip)
+            _train_loop(model, train_loader, loss_criterion, optimizer, device, history, task_handler, grad_clip, use_amp)
 
             val_loss = _eval_loop(model, val_loader, loss_criterion, device, history, task_handler)
 
