@@ -35,10 +35,9 @@ class VaeLoss:
 
         return recon_loss + self.beta * kld
     
-from test.debug_constants import SPATIAL_DOMAIN_MATRIX_32
-def mask_outputs(x):
-    matrix = torch.tensor(SPATIAL_DOMAIN_MATRIX_32).float()
-    mask_np = np.where(SPATIAL_DOMAIN_MATRIX_32 == None, 0.0, 1.0)
+
+def mask_outputs(x, matrix):
+    mask_np = np.where(matrix == None, 0.0, 1.0)
     mask = torch.tensor(mask_np, dtype=torch.float32)
     mask = mask.view(1, 1, *mask.shape, 1)
     device = x.device
@@ -46,11 +45,12 @@ def mask_outputs(x):
     return x
 
 class CustomMSELoss(torch.nn.Module):
-    def __init__(self, emb_loss=0, masked: bool = False):
+    def __init__(self, emb_loss=0, masked: bool = False, matrix=None):
         super(CustomMSELoss, self).__init__()
         self.mse_loss = torch.nn.MSELoss()
         self.emb_loss = emb_loss
         self.masked = masked
+        self.matrix = matrix
 
     def forward(self, outputs, inputs):
         if isinstance(outputs, tuple):
@@ -61,7 +61,7 @@ class CustomMSELoss(torch.nn.Module):
             embedding = None
 
         if self.masked:
-            reconstruction = mask_outputs(reconstruction)
+            reconstruction = mask_outputs(reconstruction, self.matrix)
 
         loss = self.mse_loss(reconstruction, inputs)
 
