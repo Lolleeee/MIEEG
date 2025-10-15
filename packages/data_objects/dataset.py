@@ -171,12 +171,9 @@ class TorchDataset(Dataset, BasicDataset):
     def _normalize_item(self, item):
         mean = self._norm_params[0]  
         std = self._norm_params[1]   
-        # Use appropriate epsilon for float16
-        eps = 1e-5 if item.dtype == torch.float16 else 1e-10
-        
+
         try:
-            item = (item - mean) / (std + eps)
-            item = item.clamp(-5, 5)
+            item = (item - mean) / (std + 1e-10)
             return item
         except Exception as e:
             raise ValueError(f"Error normalizing data: {e}")

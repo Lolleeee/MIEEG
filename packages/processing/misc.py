@@ -1,6 +1,7 @@
 from typing import Dict, Iterator, List
 
 import numpy as np
+import torch
 
 from packages.data_objects.signal import SignalObject
 
@@ -75,6 +76,8 @@ def calculate_global_normalization_params(data_loader: Iterator, ) -> Dict[str, 
     means = []
     stds = []
     for data in data_loader:
+        if isinstance(data, torch.Tensor):
+            data = data.numpy()
         means.append(np.mean(data))
         stds.append(np.std(data))
     return {"mean": np.mean(means), "std": np.mean(stds)}
