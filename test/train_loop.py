@@ -1,5 +1,5 @@
 
-from packages.models.autoencoder_plus import Conv3DAEP
+from packages.models.autoencoder import Conv3DAE
 from packages.plotting.reconstruction_plots import plot_reconstruction_distribution
 from packages.train.training import train_model
 from packages.train.loss import VaeLoss, CustomMSELoss
@@ -13,11 +13,10 @@ from dotenv import load_dotenv
 # model = Conv3DAE(in_channels=25, embedding_dim=128, hidden_dims=[64, 128, 256], use_convnext=False)
 
 
-from packages.models.autoencoder_plus import Conv3DAEP
-model = Conv3DAEP(in_channels=25, latent_dim=128)
+model = Conv3DAE(in_channels=25)
 
 load_dotenv()
-dataset_path = "/media/lolly/Bruh/WAYEEGGAL_dataset/0.4subset_data"
+dataset_path = "/media/lolly/Bruh/WAYEEGGAL_dataset/0.5subset_datanooverlap"
 # Dummy training loop
 optimizer = torch.optim.AdamW
 criterion = CustomMSELoss()
@@ -37,9 +36,9 @@ config = {
 
 metrics = {}
 
-dataset = CustomTestDataset(root_folder=dataset_path, nsamples=10)
-
-train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.1, 'val': 0.9, 'test': 0})
+# dataset = CustomTestDataset(root_folder=dataset_path, nsamples=10)
+dataset = TorchDataset(root_folder=dataset_path)
+train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.1, 'val': 0.9, 'test': 0}, norm_axes=(0, 4), batch_size=1)
 
 print("\nStarting dummy training loop...")
 

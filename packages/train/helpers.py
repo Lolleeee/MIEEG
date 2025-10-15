@@ -124,3 +124,16 @@ class NoOpHistory(History):
         super().__init__
     def plot_history(self, *args, **kwargs):
         pass
+
+class GradientLogger:
+    def __init__(self, interval= None):
+        self.interval = interval
+        self.counter = 0
+
+    def log(self, model):
+        if self.interval is None:
+            return
+        self.counter += 1
+        if self.counter % self.interval == 0:
+            for name, param in model.named_parameters():
+                logging.info(f"Gradient norm for {name}: {param.grad.norm().item():.4f}")

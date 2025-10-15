@@ -207,10 +207,13 @@ class CustomTestDataset(Dataset, BasicDataset):
 
     def __getitem__(self, idx):
         if self.use_files:
-            return BasicDataset.__getitem__(self, idx)
+            data = BasicDataset.__getitem__(self, idx)
+            if isinstance(data, np.ndarray):
+                data = torch.from_numpy(data)
+            return data.float()
         else:
             np.random.seed(RANDOM_SEED + idx)
             data = np.random.randn(*self.shape).astype(np.float32)
-            return torch.from_numpy(data)
+            return torch.from_numpy(data).float()
 
 

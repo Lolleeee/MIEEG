@@ -33,7 +33,7 @@ def _get_set_sizes(sets_size, dataset, indices):
 
     return train_idx, val_idx, test_idx
 
-def _calc_norm_params(train_loader, axes, winsorize=None):
+def _calc_norm_params(train_loader, axes):
     """
     Calculate global mean and std using batched Welford's algorithm.
     Faster and more memory efficient.
@@ -123,7 +123,7 @@ def get_data_loaders(
             num_workers=num_workers,
         )
 
-        mean, std = _calc_norm_params(temp_train_loader, axes=norm_axes, winsorize=winsorize)
+        mean, std = _calc_norm_params(temp_train_loader, axes=norm_axes)
 
         dataset._norm_params = (mean, std)
 
