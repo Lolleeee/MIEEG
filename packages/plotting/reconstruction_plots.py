@@ -118,7 +118,15 @@ def plot_reconstruction_slices(
         original = original.cpu().detach().numpy()
     if isinstance(reconstructed, torch.Tensor):
         reconstructed = reconstructed.cpu().detach().numpy()
+    
     assert original.shape == reconstructed.shape, "Original and reconstructed shapes must match."
+    if len(original.shape) > 4 or len(reconstructed.shape) > 4:
+        try:
+            original = original.squeeze()
+            reconstructed = reconstructed.squeeze()
+        except:
+            raise ValueError("Input data must be 4D (freq, channels, channels, time), couldn't squeeze.")
+        
     assert len(original.shape) == 4, "Input data must be 4D (freq, channels, channels, time)."
     freq_dim, ch1_dim, ch2_dim, time_dim = original.shape
     if freqs is not None:

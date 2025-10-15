@@ -72,10 +72,7 @@ class BasicDataset():
             else:
                 unpacked_data = packed_data
 
-            if isinstance(unpacked_data, np.ndarray):
-                    unpacked_data = torch.from_numpy(unpacked_data)
-
-            return unpacked_data.float()
+            return unpacked_data
         except Exception as e:
             raise TypeError(f"Error loading {item_path}: {e}")
 

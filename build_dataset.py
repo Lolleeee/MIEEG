@@ -44,7 +44,7 @@ def main():
             EEG, debug_constants.SPATIAL_DOMAIN_MATRIX_32
         )  # Move time axis to front
 
-        EEG = tensor_reshape.segment_signal(EEG, window=250, overlap=125)
+        EEG = tensor_reshape.segment_signal(EEG, window=250, overlap=0)
 
         EEG._reorder_signal_dimensions(
             ["epochs", "frequencies", "rows", "cols", "time"]
