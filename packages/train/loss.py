@@ -84,19 +84,24 @@ import torch.nn.functional as F
 
 class PerceptualLoss(nn.Module):
     """Feature-based loss that provides stronger encoder gradients."""
-    def __init__(self, model, feature_weight=0.7, pixel_weight=0.5):
+    def __init__(self, model, feature_weight=0.5, pixel_weight=0.5):
         super().__init__()
         self.model = model
         self.feature_weight = feature_weight
         self.pixel_weight = pixel_weight
 
-    def forward(self, reconstruction, target):
-        # Extract encoder features
-        rec_features = self.model.encode(reconstruction)
+    def forward(self, model_output, target):
+        if isinstance(model_output, tuple):
+            reconstruction, rec_features = model_output
+        else:
+            reconstruction = model_output
+            rec_features = self.model.encode(reconstruction)
+
+        # Compute target features (no gradient)
         with torch.no_grad():
             target_features = self.model.encode(target)
 
-        # Compute losses
+        # Compute feature and pixel losses
         feature_loss = F.mse_loss(rec_features, target_features)
         pixel_loss = F.mse_loss(reconstruction, target)
 
