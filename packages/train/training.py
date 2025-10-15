@@ -1,7 +1,7 @@
 import sys
 import torch
 import logging
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 from packages.train.helpers import EarlyStopping, BackupManager, GradientLogger, History, NoOpHistory
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from typing import Callable, Dict, List
@@ -106,7 +106,7 @@ def _train_loop(model, train_loader, loss_criterion, optimizer, device, history,
             scaler.step(optimizer)
             scaler.update()
             train_loss += loss.item() * batch.size(0)
-            print(1)
+
             batchpbar.update()
             batchpbar.set_postfix({'Batch Loss': loss.item()})
         train_loss /= len(train_loader.dataset)
