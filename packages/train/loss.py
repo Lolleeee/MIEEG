@@ -2,6 +2,7 @@ import sys
 import torch 
 import numpy as np
 import torch.nn.functional as F
+import torch.nn as nn
 
 class VaeLoss:
     def __init__(self, beta=1.0):
@@ -74,3 +75,33 @@ class CustomMSELoss(torch.nn.Module):
             sys.exit(0)
             
         return loss
+
+
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class PerceptualLoss(nn.Module):
+    """Feature-based loss that provides stronger encoder gradients."""
+    def __init__(self, model, feature_weight=0.7, pixel_weight=0.5):
+        super().__init__()
+        self.model = model
+        self.feature_weight = feature_weight
+        self.pixel_weight = pixel_weight
+
+    def forward(self, reconstruction, target):
+        # Extract encoder features
+        rec_features = self.model.encode(reconstruction)
+        with torch.no_grad():
+            target_features = self.model.encode(target)
+
+        # Compute losses
+        feature_loss = F.mse_loss(rec_features, target_features)
+        pixel_loss = F.mse_loss(reconstruction, target)
+
+        total_loss = (
+            self.feature_weight * feature_loss +
+            self.pixel_weight * pixel_loss
+        )
+        return total_loss

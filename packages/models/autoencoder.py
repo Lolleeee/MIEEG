@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 
 
-class ggConv3DAE(nn.Module):
+class basicConv3DAE(nn.Module):
     def __init__(self, in_channels=50, latent_dim=128):
         """
         3D Convolutional Autoencoder for input shape [batch, 50, 7, 5, 250]
@@ -13,7 +13,7 @@ class ggConv3DAE(nn.Module):
             in_channels: Number of input channels (50 in your case)
             embedding_dim: Size of the latent embedding space
         """
-        super(Conv3DAE, self).__init__()
+        super(basicConv3DAE, self).__init__()
 
         # Encoder
         self.encoder = nn.Sequential(
