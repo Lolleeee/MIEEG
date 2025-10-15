@@ -166,7 +166,7 @@ class TorchDataset(Dataset, BasicDataset):
         if self._norm_params is not None:
             data = self._normalize_item(data)
 
-        return data
+        return data.float()
 
     def _normalize_item(self, item):
         mean = self._norm_params[0]  
