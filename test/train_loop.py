@@ -19,7 +19,7 @@ load_dotenv()
 dataset_path = "/media/lolly/Bruh/WAYEEGGAL_dataset/0.5subset_datanooverlap"
 # Dummy training loop
 optimizer = torch.optim.AdamW
-criterion = PerceptualLoss(model)
+criterion = CustomMSELoss(scale=1, masked=True, matrix=None)
 mae = torch.nn.L1Loss
 
 config = {
