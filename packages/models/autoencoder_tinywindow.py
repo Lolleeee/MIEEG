@@ -60,8 +60,8 @@ class ConvNeXtBlock3D(nn.Module):
 class Conv3DAE(nn.Module):
     def __init__(
         self, 
-        in_channels=25,  # Changed from 50 to 25
-        input_spatial=(7, 5, 64),  # NEW: Added as parameter (H, W, D)
+        in_channels=25, 
+        input_spatial=(7, 5, 64),  
         latent_dim=128, 
         hidden_dims=None,
         use_convnext=False,
@@ -305,3 +305,19 @@ class Conv3DAE(nn.Module):
         embedding = self.encode(x)
         reconstruction = self.decode(embedding)
         return reconstruction
+
+if __name__ == "__main__":
+    model = Conv3DAE(use_convnext=True, drop_p=0.1)
+    print(model)
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Total parameters: {total_params:,}")
+
+    # Quick forward pass to verify shapes
+    bs = 1
+    c = model.in_channels
+    h, w, d = model.input_spatial
+    x = torch.randn(bs, c, h, w, d)
+    with torch.no_grad():
+        out = model(x)
+    print("Input shape:", x.shape)
+    print("Output shape:", out.shape)

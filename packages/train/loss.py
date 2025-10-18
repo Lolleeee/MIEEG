@@ -111,3 +111,36 @@ class PerceptualLoss(nn.Module):
             self.pixel_weight * pixel_loss
         )
         return total_loss
+    
+
+class CustomL1Loss(nn.Module):
+    def __init__(self, emb_loss=0, masked: bool = False, matrix=None, scale = 1.0):
+        super().__init__()
+        self.l1_loss = nn.L1Loss()
+        self.emb_loss = emb_loss
+        self.masked = masked
+        self.matrix = matrix
+        self.scale = scale
+        
+    def forward(self, outputs, inputs):
+        if isinstance(outputs, tuple):
+            reconstruction = outputs[0]  
+            embedding = outputs[1]
+        else:
+            reconstruction = outputs  
+            embedding = None
+
+        if self.masked:
+            reconstruction = mask_outputs(reconstruction, self.matrix)
+
+        loss = self.l1_loss(reconstruction, inputs)
+
+        if embedding is not None:
+            L1_norm = torch.mean(torch.abs(embedding))
+            loss += self.emb_loss * L1_norm
+
+        if torch.isnan(loss):
+            print(outputs, inputs)
+            sys.exit(0)
+
+        return loss * self.scale
