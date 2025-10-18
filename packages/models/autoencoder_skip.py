@@ -197,6 +197,9 @@ class Conv3DAE(nn.Module):
         reversed_hidden_dims = list(reversed(hidden_dims))
         drop_probs = [x.item() for x in torch.linspace(0, drop_p, len(hidden_dims))]
         
+        # Track output channels for each decoder layer
+        self.decoder_output_channels = []
+        
         for i in range(len(reversed_hidden_dims)):
             current_channels = reversed_hidden_dims[i]
             layer_modules = []
@@ -253,6 +256,12 @@ class Conv3DAE(nn.Module):
                         nn.BatchNorm3d(next_channels),
                         nn.ReLU()
                     ])
+                
+                # Output channels after upsampling
+                self.decoder_output_channels.append(next_channels)
+            else:
+                # No upsampling, channels stay the same
+                self.decoder_output_channels.append(current_channels)
             
             self.decoder_layers.append(nn.Sequential(*layer_modules))
         
@@ -274,10 +283,24 @@ class Conv3DAE(nn.Module):
                 )
         
         # Decoder skip projections
-        reversed_hidden_dims = list(reversed(self.hidden_dims))
+        # Note: decoder layers process in reverse, but we need to track what channels
+        # each layer actually outputs AFTER processing
         for from_idx, to_idx in self.decoder_skip_connections:
-            from_channels = reversed_hidden_dims[from_idx]
-            to_channels = reversed_hidden_dims[to_idx]
+            # Determine output channels for each decoder layer
+            # Decoder layer i outputs:
+            # - If i < len-1: reversed_hidden_dims[i+1] (after upsampling)
+            # - If i == len-1: reversed_hidden_dims[i] (no upsampling)
+            reversed_hidden_dims = list(reversed(self.hidden_dims))
+            
+            if from_idx < len(reversed_hidden_dims) - 1:
+                from_channels = reversed_hidden_dims[from_idx + 1]
+            else:
+                from_channels = reversed_hidden_dims[from_idx]
+            
+            if to_idx < len(reversed_hidden_dims) - 1:
+                to_channels = reversed_hidden_dims[to_idx + 1]
+            else:
+                to_channels = reversed_hidden_dims[to_idx]
             
             if from_channels != to_channels:
                 key = f"{from_idx}_to_{to_idx}"
@@ -329,6 +352,8 @@ class Conv3DAE(nn.Module):
         
         # Forward through encoder layers
         for i, layer in enumerate(self.encoder_layers):
+            x = layer(x)
+            
             # Add skip connection input if this layer receives one
             for from_idx, to_idx in self.encoder_skip_connections:
                 if to_idx == i and from_idx in skip_outputs:
@@ -347,7 +372,6 @@ class Conv3DAE(nn.Module):
                     
                     x = x + skip_feat
             
-            x = layer(x)
             skip_outputs[i] = x
         
         x = x.view(x.size(0), -1)  # Flatten
@@ -365,6 +389,8 @@ class Conv3DAE(nn.Module):
         
         # Forward through decoder layers
         for i, layer in enumerate(self.decoder_layers):
+            x = layer(x)
+            
             # Add skip connection input if this layer receives one
             for from_idx, to_idx in self.decoder_skip_connections:
                 if to_idx == i and from_idx in skip_outputs:
@@ -383,7 +409,6 @@ class Conv3DAE(nn.Module):
                     
                     x = x + skip_feat
             
-            x = layer(x)
             skip_outputs[i] = x
         
         x = self.final_conv(x)
@@ -403,7 +428,7 @@ if __name__ == "__main__":
     print("Example 1: Standard autoencoder (no skip connections)")
     print("=" * 60)
     model1 = Conv3DAE(use_convnext=True, drop_p=0.1, hidden_dims=[64, 128, 256])
-    print(model1)
+
     total_params = sum(p.numel() for p in model1.parameters())
     print(f"Total parameters: {total_params:,}")
     
@@ -464,3 +489,6 @@ if __name__ == "__main__":
     print("Input shape:", x.shape)
     print("Output shape:", out.shape)
     print("✓ Forward pass successful!")
+
+    print(model4)
+    
