@@ -484,6 +484,8 @@ if __name__ == "__main__":
     c = model4.in_channels
     h, w, d = model4.input_spatial
     x = torch.randn(bs, c, h, w, d)
+    print(x.shape)
+    
     with torch.no_grad():
         out = model4(x)
     print("Input shape:", x.shape)
@@ -491,4 +493,3 @@ if __name__ == "__main__":
     print("✓ Forward pass successful!")
 
     print(model4)
-    
