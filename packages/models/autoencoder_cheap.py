@@ -216,13 +216,16 @@ class Conv3DAE(nn.Module):
         # Bottleneck
         final_spatial = self.encoder_spatial_dims[-1]
         self.flat_size = hidden_dims[-1] * final_spatial[0] * final_spatial[1] * final_spatial[2]
-        
+
+        print(f"Debug - Final spatial: {final_spatial}, Flat size: {self.flat_size}")  # Debug line
+
         self.fc_encoder = nn.Sequential(
             nn.Linear(self.flat_size, latent_dim * 2),
             nn.GELU(),
             nn.Linear(latent_dim * 2, latent_dim)
         )
-        
+
+            
         self.fc_decoder = nn.Sequential(
             nn.Linear(latent_dim, latent_dim * 2),
             nn.GELU(),
@@ -232,7 +235,7 @@ class Conv3DAE(nn.Module):
         # ========== DECODER ==========
         decoder_blocks = []
         reversed_hidden_dims = list(reversed(hidden_dims))
-        
+
         for i in range(len(reversed_hidden_dims)):
             in_ch = reversed_hidden_dims[i]
             out_ch = reversed_hidden_dims[i + 1] if i < len(reversed_hidden_dims) - 1 else hidden_dims[0]
@@ -250,54 +253,70 @@ class Conv3DAE(nn.Module):
             
             # Upsampling transition (except last layer)
             if i < len(reversed_hidden_dims) - 1:
-                spatial_idx_in = len(self.encoder_spatial_dims) - 1 - i
-                spatial_idx_out = spatial_idx_in - 1
-                output_padding = self._compute_output_padding(
-                    self.encoder_spatial_dims[spatial_idx_in],
-                    self.encoder_spatial_dims[spatial_idx_out]
-                )
+                # Get target spatial dimensions for exact upsampling
+                target_spatial = self.encoder_spatial_dims[-(i + 2)]
                 
+                # Use trilinear interpolation + convolution for exact size matching
                 decoder_blocks.extend([
-                    nn.ConvTranspose3d(
-                        in_ch, out_ch,
-                        kernel_size=2,
-                        stride=2,
-                        output_padding=output_padding,
-                        bias=False
-                    ),
+                    nn.Upsample(size=target_spatial, mode='trilinear', align_corners=False),
+                    nn.Conv3d(in_ch, out_ch, kernel_size=3, padding=1, bias=False),
                     nn.GroupNorm(num_groups=1, num_channels=out_ch),
                     nn.GELU()
                 ])
-        
+
         # Reconstruction head
         decoder_blocks.append(
             nn.Conv3d(hidden_dims[0], in_channels, kernel_size=1)
         )
-        
+
         self.decoder = nn.Sequential(*decoder_blocks)
+
         
     def _compute_encoder_spatial_dims(self, input_shape, num_layers):
-        """Compute spatial dimensions at each encoder stage"""
-        dims = [input_shape]
+        """
+        Compute spatial dimensions at each encoder stage.
+        Tracks dimensions after each downsampling operation.
+        """
+        dims = [input_shape]  # Initial input
         h, w, d = input_shape
         
-        for i in range(num_layers):
-            if i < num_layers - 1:  # Downsampling layers
-                h = (h + 1) // 2
-                w = (w + 1) // 2
-                d = (d + 1) // 2
+        # After stem convolution (stride=1, preserves dimensions with padding=1)
+        # No change: (h+2*1-3)//1+1 = h
+        
+        # Track dimensions after each downsampling stage
+        for i in range(num_layers - 1):  # Only downsampling stages
+            if self.use_factorized:
+                # FactorizedConv3D with stride=2:
+                # Spatial conv: kernel=(3,3,1), stride=(2,2,1), padding=(1,1,0)
+                # Temporal conv: kernel=(1,1,3), stride=(1,1,2), padding=(0,0,1)
+                h = (h + 2*1 - 3) // 2 + 1  # Spatial dimension
+                w = (w + 2*1 - 3) // 2 + 1  # Spatial dimension  
+                d = (d + 2*1 - 3) // 2 + 1  # Temporal dimension
+            else:
+                # Depthwise separable: kernel=3, stride=2, padding=1 (uniform)
+                h = (h + 2*1 - 3) // 2 + 1
+                w = (w + 2*1 - 3) // 2 + 1
+                d = (d + 2*1 - 3) // 2 + 1
+            
             dims.append((h, w, d))
         
         return dims
-    
+
     def _compute_output_padding(self, input_spatial, target_spatial):
-        """Calculate output padding for transposed convolution"""
+        """
+        Calculate output padding for ConvTranspose3d.
+        Formula: output = (input - 1) * stride - 2*padding + kernel + output_padding
+        For kernel=2, stride=2, padding=0:
+            output = input * 2 + output_padding
+        Therefore: output_padding = target - input * 2
+        """
         out_pad = []
         for inp, targ in zip(input_spatial, target_spatial):
-            expected = inp * 2
-            pad = targ - expected
+            expected = inp * 2  # What we get without output_padding
+            pad = targ - expected  # Additional padding needed
             out_pad.append(max(0, pad))
         return tuple(out_pad)
+
     
     def encode(self, x):
         """Encode to latent embedding"""
