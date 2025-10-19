@@ -12,14 +12,25 @@ from packages.data_objects.dataset import TorchDataset, CustomTestDataset
 from dotenv import load_dotenv
 # model = Conv3DAE(in_channels=25, embedding_dim=128, hidden_dims=[64, 128, 256], use_convnext=False)
 
+from packages.models.vqae import CompactVQVAE_EEGChunk, SequenceProcessor
+from packages.train.loss import VQVAELoss, SequenceVQVAELoss
+model = CompactVQVAE_EEGChunk(
+    in_channels=25,
+    input_spatial=(7, 5, 32),
+    embedding_dim=128,
+    codebook_size=512
+)
 
-model = basicConv3DAE(in_channels=25)
+
 
 load_dotenv()
 dataset_path = "/media/lolly/Bruh/WAYEEGGAL_dataset/0.5subset_datanooverlap"
 # Dummy training loop
 optimizer = torch.optim.AdamW
-criterion = CustomMSELoss(scale=1, masked=True, matrix=None)
+criterion = VQVAELoss(
+    recon_loss_type='mse',
+    recon_weight=1.0
+)
 mae = torch.nn.L1Loss
 
 config = {
@@ -32,18 +43,15 @@ config = {
     'history_plot': {'plot_type': 'extended', 'save_path': './training_history'},
     'grad_clip': 1.0,
     'use_amp': False,
-    'grad_logging_interval': 10,
-    'asym_lr': [{'params': model.encoder.parameters(), 'lr': 1e-4},
-                {'params': model.decoder.parameters(), 'lr': 1e-3}]
+    'grad_logging_interval': 10    
 }
 
 metrics = {}
 
 # dataset = CustomTestDataset(root_folder=dataset_path, nsamples=10)
-dataset = TorchDataset(root_folder=dataset_path)
-dataset._norm_params = (29.62338638305664,69.37812805175781)
+dataset = CustomTestDataset(shape=(25, 7, 5, 32), nsamples=10)
 
-train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.1, 'val': 0.9, 'test': 0}, batch_size=2)
+train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.1, 'val': 0.1}, batch_size=2)
 
 print("\nStarting dummy training loop...")
 

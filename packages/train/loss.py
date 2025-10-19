@@ -268,7 +268,7 @@ class VQVAELoss(nn.Module):
         loss = sum(F.l1_loss(g1, g2) for g1, g2 in zip(x_grads, recon_grads))
         return loss / 3.0
     
-    def forward(self, x, x_recon, vq_loss):
+    def forward(self, outputs ,x):
         """
         Compute total loss.
         
@@ -281,6 +281,7 @@ class VQVAELoss(nn.Module):
             loss: Total loss (scalar)
         """
         # Reconstruction loss
+        x_recon, vq_loss, _ = outputs
         if self.recon_loss_type == 'mse':
             recon_loss = F.mse_loss(x_recon, x)
         elif self.recon_loss_type == 'l1':
