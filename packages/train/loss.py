@@ -190,8 +190,8 @@ class SequenceVQVAELoss(nn.Module):
         
         loss = sum(F.l1_loss(g1, g2) for g1, g2 in zip(x_grads, recon_grads))
         return loss / 3.0
-    
-    def forward(self, chunks, chunks_recon, vq_loss):
+
+    def forward(self, outputs, chunks):
         """
         Compute total loss for sequence.
         
@@ -203,6 +203,7 @@ class SequenceVQVAELoss(nn.Module):
         Returns:
             loss: Total loss (scalar)
         """
+        chunks_recon, vq_loss, _= outputs
         # Reconstruction loss
         if self.recon_loss_type == 'mse':
             recon_loss = F.mse_loss(chunks_recon, chunks)
