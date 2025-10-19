@@ -221,7 +221,7 @@ class SequenceVQVAELoss(nn.Module):
         return total_loss
     
 
-    class VQVAELoss(nn.Module):
+class VQVAELoss(nn.Module):
     """
     Complete loss function for VQ-VAE.
     
