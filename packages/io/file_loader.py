@@ -94,7 +94,7 @@ def _calc_norm_params(train_loader, axes):
 
     mean = mean.view(*reshape_dims)
     std = std.view(*reshape_dims)
-
+    print(f"Calculated mean shape: {mean.shape}, std shape: {std.shape}")
     return mean, std
 
 
