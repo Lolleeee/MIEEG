@@ -105,7 +105,6 @@ def get_data_loaders(
     sets_size: dict = {"train": 0.6, "val": 0.2, "test": 0.2},
     num_workers: int = 4,
     norm_axes: Tuple[int] = None,
-    winsorize: Tuple[float] = (0.01, 0.99),
 ) -> DataLoader:
     
     indices = np.arange(len(dataset))

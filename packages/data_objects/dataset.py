@@ -193,6 +193,7 @@ class TorchDataset(Dataset, BasicDataset):
             raise ValueError(f"Data length {data.shape[-1]} is smaller than chunk size {self.chunk_size}.")
 
         cropped = data[..., :total_len].squeeze(0)
+
         k = cropped.dim()  # original number of dims of cropped
         reshaped = cropped.reshape(*cropped.shape[:-1], n_chunks, self.chunk_size)
         
