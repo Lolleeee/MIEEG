@@ -336,7 +336,7 @@ class SequenceProcessor(nn.Module):
         
         # Decode each chunk
         chunks_recon = self.chunk_ae.decode(embeddings_flat)
-        print(chunks_recon.shape)
+        
         # Reshape back to sequence
         chunks_recon = chunks_recon.view(batch_size, num_chunks, *self.chunk_shape)
         

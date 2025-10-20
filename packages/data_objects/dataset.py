@@ -169,8 +169,8 @@ class TorchDataset(Dataset, BasicDataset):
             data = self._normalize_item(data)
 
         if self.chunk_size is not None:
-            chunked_data = self._get_chunks(data)
-        return chunked_data.float()
+            data = self._get_chunks(data)
+        return data.float()
 
     def _normalize_item(self, item):
         mean = self._norm_params[0]  
@@ -181,11 +181,10 @@ class TorchDataset(Dataset, BasicDataset):
             return item
         except Exception as e:
             raise ValueError(f"Error normalizing data: {e}")
+        
     def _get_chunks(self, data):
         if data.shape[-1] < self.chunk_size:
                 raise ValueError(f"Data length {data.shape[-1]} is smaller than chunk size {self.chunk_size}.")
-            
-        start_idx = 0
         
         n_chunks = data.shape[-1] // self.chunk_size
         total_len = n_chunks * self.chunk_size
