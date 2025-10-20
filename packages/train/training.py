@@ -68,7 +68,6 @@ class TaskHandler:
         self._reset_metrics()
     
     def process(self, loss_criterion, model, batch):
-            print(batch.shape)
             outputs = model(batch)
             loss = loss_criterion(outputs, batch)
             
