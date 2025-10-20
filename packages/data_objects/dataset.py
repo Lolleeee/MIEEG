@@ -154,10 +154,12 @@ class TorchDataset(Dataset, BasicDataset):
         self,
         root_folder: str,
         unpack_func: Union[Callable[[Any], Any], str] = None,
+        chunk_size: int = None
     ):
         BasicDataset.__init__(self, root_folder, unpack_func)
         self._norm_params = None
-        
+        self.chunk_size = chunk_size
+
     def __getitem__(self, idx):
         data = BasicDataset.__getitem__(self, idx)
         if isinstance(data, np.ndarray):
@@ -165,6 +167,23 @@ class TorchDataset(Dataset, BasicDataset):
 
         if self._norm_params is not None:
             data = self._normalize_item(data)
+
+        if self.chunk_size is not None:
+            if data.shape[-1] < self.chunk_size:
+                raise ValueError(f"Data length {data.shape[-1]} is smaller than chunk size {self.chunk_size}.")
+            
+            start_idx = 0
+            
+            n_chunks = data.shape[-1] // self.chunk_size
+            total_len = n_chunks * self.chunk_size
+            if n_chunks == 0:
+                raise ValueError(f"Data length {data.shape[-1]} is smaller than chunk size {self.chunk_size}.")
+
+            cropped = data[..., :total_len]
+
+            k = cropped.dim()  # original number of dims of cropped
+            reshaped = cropped.reshape(*cropped.shape[:-1], n_chunks, self.chunk_size)
+            data = reshaped.permute(k - 1, *range(0, k - 1), k)
 
         return data.float()
 

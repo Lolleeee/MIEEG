@@ -12,14 +12,12 @@ from packages.data_objects.dataset import TorchDataset, CustomTestDataset
 from dotenv import load_dotenv
 # model = Conv3DAE(in_channels=25, embedding_dim=128, hidden_dims=[64, 128, 256], use_convnext=False)
 
-from packages.models.vqae import CompactVQVAE_EEGChunk, SequenceProcessor
+from packages.models.vqae import VQVAE, SequenceProcessor
 from packages.train.loss import VQVAELoss, SequenceVQVAELoss
-model = CompactVQVAE_EEGChunk(
-    in_channels=25,
-    input_spatial=(7, 5, 32),
-    embedding_dim=128,
-    codebook_size=512
-)
+
+model = SequenceProcessor(chunk_shape=(50, 7, 5, 25))
+
+
 
 
 
@@ -27,7 +25,7 @@ load_dotenv()
 dataset_path = "/media/lolly/Bruh/WAYEEGGAL_dataset/0.5subset_datanooverlap"
 # Dummy training loop
 optimizer = torch.optim.AdamW
-criterion = VQVAELoss(
+criterion = SequenceVQVAELoss(
     recon_loss_type='mse',
     recon_weight=1.0
 )
@@ -47,12 +45,12 @@ config = {
 }
 
 metrics = {}
-
+    
 # dataset = CustomTestDataset(root_folder=dataset_path, nsamples=10)
-dataset = CustomTestDataset(shape=(25, 7, 5, 32), nsamples=10)
+dataset = TorchDataset("/home/lolly/Desktop/test", chunk_size=25)
 
 train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.1, 'val': 0.1}, batch_size=2)
-
+print(next(iter(train_loader)).shape)
 print("\nStarting dummy training loop...")
 
 model = train_model(model, train_loader=train_loader, val_loader=val_loader, loss_criterion=criterion, optimizer=optimizer, config=config, metrics=metrics)
