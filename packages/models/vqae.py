@@ -3,10 +3,128 @@ import torch.nn as nn
 import math
 import torch.nn.functional as F
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import math
+
+
+class PixelShuffle3d(nn.Module):
+    """
+    3D Pixel Shuffle for upsampling.
+    Rearranges elements in a tensor from (B, C*r^3, D, H, W) to (B, C, D*r, H*r, W*r).
+    """
+    def __init__(self, upscale_factor):
+        super().__init__()
+        self.upscale_factor = upscale_factor
+        
+    def forward(self, x):
+        batch_size, channels, d, h, w = x.size()
+        r = self.upscale_factor
+        
+        # Calculate output channels
+        out_channels = channels // (r ** 3)
+        
+        # Reshape: (B, C_out, r, r, r, D, H, W)
+        x = x.view(batch_size, out_channels, r, r, r, d, h, w)
+        
+        # Permute to interleave: (B, C_out, D, r, H, r, W, r)
+        x = x.permute(0, 1, 5, 2, 6, 3, 7, 4).contiguous()
+        
+        # Collapse to final shape: (B, C_out, D*r, H*r, W*r)
+        x = x.view(batch_size, out_channels, d * r, h * r, w * r)
+        
+        return x
+
+
+class DecoderBlock(nn.Module):
+    """
+    Hybrid decoder block: PixelShuffle + adaptive interpolation.
+    Handles non-uniform spatial dimensions gracefully.
+    """
+    def __init__(self, in_channels, out_channels, target_shape, upscale_factor, use_skip=False):
+        super().__init__()
+        self.use_skip = use_skip
+        self.upscale_factor = upscale_factor
+        self.target_shape = target_shape  # Exact target (H, W, T)
+        
+        # Calculate number of groups for GroupNorm
+        skip_channels = in_channels if use_skip else 0
+        ngroups = self._get_num_groups(out_channels)
+        
+        if upscale_factor > 1:
+            # PixelShuffle upsampling for learnable features
+            self.upsample = nn.Sequential(
+                nn.Conv3d(in_channels + skip_channels, 
+                         out_channels * (upscale_factor ** 3),
+                         kernel_size=3, padding=1, bias=False),
+                PixelShuffle3d(upscale_factor),
+                nn.GroupNorm(ngroups, out_channels),
+                nn.GELU()
+            )
+        else:
+            # No upsampling, just refine
+            self.upsample = nn.Sequential(
+                nn.Conv3d(in_channels + skip_channels, out_channels,
+                         kernel_size=3, padding=1, bias=False),
+                nn.GroupNorm(ngroups, out_channels),
+                nn.GELU()
+            )
+        
+        # Refinement after size adjustment
+        self.refine = nn.Sequential(
+            nn.Conv3d(out_channels, out_channels, kernel_size=3, 
+                     padding=1, bias=False),
+            nn.GroupNorm(ngroups, out_channels),
+            nn.GELU()
+        )
+    
+    def _get_num_groups(self, channels):
+        """Calculate valid number of groups for GroupNorm."""
+        ngroups = min(8, channels)
+        if channels % ngroups != 0:
+            # Find largest divisor <= 8
+            for g in reversed(range(1, ngroups + 1)):
+                if channels % g == 0:
+                    return g
+        return ngroups
+    
+    def forward(self, x, skip=None):
+        # Concatenate skip connection
+        if self.use_skip and skip is not None:
+            x = torch.cat([x, skip], dim=1)
+        
+        # PixelShuffle upsampling
+        x = self.upsample(x)
+        
+        # Adjust to exact target shape if needed
+        if self.target_shape is not None:
+            current_shape = x.shape[2:]  # (H, W, T)
+            print(current_shape)
+            if current_shape != self.target_shape:
+                # Use trilinear interpolation to reach exact size
+                x = F.interpolate(
+                    x, 
+                    size=self.target_shape, 
+                    mode='trilinear', 
+                    align_corners=False
+                )
+        
+        # Refinement convolutions
+        x = self.refine(x)
+        return x
+
+
 class VQVAE(nn.Module):
     """
     Compress single EEG chunk with flexible input dimensions.
     Automatically adapts to input shape: (channels, H, W, T)
+    
+    NOW WITH OPTIMIZED DECODER:
+    - Pixel Shuffle upsampling (no checkerboard artifacts)
+    - Adaptive interpolation for exact dimension matching
+    - Optional U-Net style skip connections
+    - Progressive refinement at each stage
     """
     def __init__(
         self,
@@ -15,7 +133,8 @@ class VQVAE(nn.Module):
         embedding_dim=128,
         codebook_size=512,
         num_downsample_stages=3,
-        use_quantizer=True  # How aggressively to compress
+        use_quantizer=True,
+        use_skip_connections=False
     ):
         super().__init__()
         
@@ -24,6 +143,7 @@ class VQVAE(nn.Module):
         self.embedding_dim = embedding_dim
         self.num_stages = num_downsample_stages
         self.use_quantizer = use_quantizer
+        self.use_skip_connections = use_skip_connections
 
         # Calculate compression strategy
         self.encoder_config = self._plan_encoder_stages(
@@ -37,6 +157,10 @@ class VQVAE(nn.Module):
         final_shape = self.encoder_config[-1]['output_shape']
         final_channels = self.encoder_config[-1]['out_channels']
         self.flat_size = final_channels * math.prod(final_shape)
+        
+        # Store for decoder
+        self.final_shape = final_shape
+        self.final_channels = final_channels
         
         # Bottleneck to target embedding
         self.to_embedding = nn.Sequential(
@@ -53,7 +177,7 @@ class VQVAE(nn.Module):
             embedding_dim=embedding_dim
         )
         
-        # Decoder (mirror of encoder)
+        # Decoder bottleneck
         self.from_embedding = nn.Sequential(
             nn.Linear(embedding_dim, embedding_dim * 2),
             nn.LayerNorm(embedding_dim * 2),
@@ -61,15 +185,11 @@ class VQVAE(nn.Module):
             nn.Linear(embedding_dim * 2, self.flat_size)
         )
         
-        self.decoder = self._build_decoder(
-            in_channels, self.encoder_config, final_channels, final_shape
-        )
+        # Build optimized decoder with hybrid upsampling
+        self.decoder_blocks = self._build_decoder(in_channels, self.encoder_config)
         
     def _plan_encoder_stages(self, input_spatial, num_stages):
-        """
-        Plan encoder stages to progressively downsample spatial dimensions.
-        Returns list of dicts with stage configurations.
-        """
+        """Plan encoder stages to progressively downsample spatial dimensions."""
         config = []
         current_shape = list(input_spatial)
         base_channels = 64
@@ -116,77 +236,65 @@ class VQVAE(nn.Module):
                     padding=stage['padding'],
                     bias=False
                 ),
-                nn.GroupNorm(1, out_ch),
+                nn.GroupNorm(min(8, out_ch), out_ch),
                 nn.GELU()
             ])
         
         return nn.Sequential(*layers)
     
-    def _build_decoder(self, out_channels, encoder_config, final_channels, final_shape):
-        """Build decoder by reversing encoder configuration with exact output sizes."""
-        layers = []
+    def _build_decoder(self, out_channels, encoder_config):
+        """
+        Build decoder with hybrid upsampling strategy.
+        PixelShuffle for learnable features + interpolation for exact sizes.
+        """
+        blocks = nn.ModuleList()
         
-        # Reverse the encoder config
+        # Reverse encoder config
         decoder_config = list(reversed(encoder_config))
         
         for i, stage in enumerate(decoder_config):
-            in_ch = final_channels if i == 0 else decoder_config[i-1]['in_channels']
+            # Determine input channels
+            if i == 0:
+                in_ch = self.final_channels
+            else:
+                in_ch = decoder_config[i-1]['in_channels']
+            
+            # Determine output channels
             out_ch = stage['in_channels'] if stage['in_channels'] is not None else out_channels
             
-            # If last stage, output original channels
+            # Last layer outputs original channels
             if i == len(decoder_config) - 1:
                 out_ch = out_channels
             
-            target_shape = stage['input_shape']
-            current_shape = final_shape if i == 0 else decoder_config[i-1]['input_shape']
+            # Get target shape and upscale factor
+            target_shape = stage['input_shape']  # Target (H, W, T)
             stride = stage['stride']
-            kernel_size = stage['kernel_size']
-            padding = stage['padding']
+            upscale_factor = stride[0] if all(s == stride[0] for s in stride) else 1
             
-            # Calculate output_padding for exact reconstruction
-            # Formula: output = (input - 1) * stride - 2*padding + kernel_size + output_padding
-            # We want: output = target, so: output_padding = target - ((input - 1) * stride - 2*padding + kernel_size)
-            output_padding = []
-            use_transposed = all(s == 2 for s in stride)
-            
-            if use_transposed:
-                for curr_dim, target_dim, s, p, k in zip(current_shape, target_shape, stride, [padding]*3, [kernel_size]*3):
-                    expected_output = (curr_dim - 1) * s - 2*p + k
-                    out_pad = target_dim - expected_output
-                    # output_padding must be less than stride or dilation
-                    out_pad = max(0, min(out_pad, s - 1))
-                    output_padding.append(out_pad)
-                
-                layers.extend([
-                    nn.ConvTranspose3d(
-                        in_ch, out_ch,
-                        kernel_size=kernel_size,
-                        stride=stride,
-                        padding=padding,
-                        output_padding=tuple(output_padding),
-                        bias=False
-                    ),
-                    nn.GroupNorm(1, out_ch) if i < len(decoder_config) - 1 else nn.Identity(),
-                    nn.GELU() if i < len(decoder_config) - 1 else nn.Identity()
-                ])
-            else:
-                # For non-uniform strides or stride=1, use upsample + conv
-                if target_shape != current_shape:
-                    layers.extend([
-                        nn.Upsample(size=target_shape, mode='trilinear', align_corners=False),
-                        nn.Conv3d(in_ch, out_ch, kernel_size=3, padding=1, bias=False),
-                        nn.GroupNorm(1, out_ch) if i < len(decoder_config) - 1 else nn.Identity(),
-                        nn.GELU() if i < len(decoder_config) - 1 else nn.Identity()
-                    ])
-                else:
-                    # Same size, just change channels
-                    layers.extend([
-                        nn.Conv3d(in_ch, out_ch, kernel_size=3, padding=1, bias=False),
-                        nn.GroupNorm(1, out_ch) if i < len(decoder_config) - 1 else nn.Identity(),
-                        nn.GELU() if i < len(decoder_config) - 1 else nn.Identity()
-                    ])
+            # Create decoder block with target shape for adaptive upsampling
+            blocks.append(DecoderBlock(
+                in_ch, out_ch, target_shape, upscale_factor,
+                use_skip=self.use_skip_connections
+            ))
         
-        return nn.Sequential(*layers)
+        return blocks
+    
+    def _get_encoder_features(self, x):
+        """Extract intermediate encoder features for skip connections."""
+        features = []
+        z = x
+        
+        # Process encoder in stages
+        layer_idx = 0
+        for i, stage_config in enumerate(self.encoder_config):
+            # Each stage has 3 layers: Conv3d, GroupNorm, GELU
+            stage_layers = self.encoder[layer_idx:layer_idx+3]
+            for layer in stage_layers:
+                z = layer(z)
+            features.append(z)
+            layer_idx += 3
+        
+        return features
     
     def encode(self, x):
         """
@@ -194,9 +302,16 @@ class VQVAE(nn.Module):
         Input: (B, in_channels, H, W, T)
         Output: (B, embedding_dim), vq_loss, indices
         """
-        z = self.encoder(x)
-        z = self.to_embedding(z)
+        # Get encoder features for skip connections if needed
+        if self.use_skip_connections:
+            encoder_features = self._get_encoder_features(x)
+            z = encoder_features[-1]
+            self._encoder_features = encoder_features
+        else:
+            z = self.encoder(x)
+            self._encoder_features = None
         
+        z = self.to_embedding(z)
 
         if self.use_quantizer:
             z_q, vq_loss, indices = self.vq(z)
@@ -207,24 +322,36 @@ class VQVAE(nn.Module):
     
     def decode(self, z_q):
         """
-        Decode from embedding.
+        Decode from embedding using hybrid decoder.
         Input: (B, embedding_dim)
         Output: (B, in_channels, H, W, T)
         """
+        # Embedding to spatial features
         z = self.from_embedding(z_q)
-        final_shape = self.encoder_config[-1]['output_shape']
-        final_channels = self.encoder_config[-1]['out_channels']
-        z = z.view(-1, final_channels, *final_shape)
-        x_recon = self.decoder(z)
-        return x_recon
+        z = z.view(-1, self.final_channels, *self.final_shape)
+        
+        # Progressive decoding with optional skip connections
+        encoder_features = self._encoder_features if hasattr(self, '_encoder_features') else None
+        
+        for i, block in enumerate(self.decoder_blocks):
+            if self.use_skip_connections and encoder_features is not None:
+                skip_idx = len(encoder_features) - 1 - i
+                skip = encoder_features[skip_idx] if 0 <= skip_idx < len(encoder_features) else None
+                z = block(z, skip)
+            else:
+                z = block(z, None)
+        
+        return z
     
     def forward(self, x):
-        """
-        Full forward pass.
-        Returns: (reconstruction, vq_loss, indices)
-        """
+        """Full forward pass."""
         z_q, vq_loss, indices = self.encode(x)
         x_recon = self.decode(z_q)
+        
+        # Clean up stored features
+        if hasattr(self, '_encoder_features'):
+            del self._encoder_features
+        
         return x_recon, vq_loss, indices
 
 

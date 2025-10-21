@@ -49,7 +49,7 @@ metrics = {}
 # dataset = CustomTestDataset(root_folder=dataset_path, nsamples=10)
 dataset = TorchDataset("/home/lolly/Desktop/test", chunk_size=25)
 
-train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.9, 'val': 0.1}, batch_size=32)
+train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.01, 'val': 0.1}, batch_size=32)
 print(next(iter(train_loader)).shape)
 print("\nStarting dummy training loop...")
 print(model)
