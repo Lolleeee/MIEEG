@@ -14,7 +14,8 @@ class VQVAE(nn.Module):
         input_spatial=(7, 5, 32),  # (H, W, T)
         embedding_dim=128,
         codebook_size=512,
-        num_downsample_stages=3  # How aggressively to compress
+        num_downsample_stages=3,
+        use_quantizer=True  # How aggressively to compress
     ):
         super().__init__()
         
@@ -22,7 +23,8 @@ class VQVAE(nn.Module):
         self.input_spatial = input_spatial
         self.embedding_dim = embedding_dim
         self.num_stages = num_downsample_stages
-        
+        self.use_quantizer = use_quantizer
+
         # Calculate compression strategy
         self.encoder_config = self._plan_encoder_stages(
             input_spatial, num_downsample_stages
@@ -195,8 +197,11 @@ class VQVAE(nn.Module):
         z = self.encoder(x)
         z = self.to_embedding(z)
         
-        # Vector quantization
-        z_q, vq_loss, indices = self.vq(z)
+
+        if self.use_quantizer:
+            z_q, vq_loss, indices = self.vq(z)
+        else:
+            z_q, vq_loss, indices = z, torch.tensor(0., device=z.device), None
         
         return z_q, vq_loss, indices
     
@@ -237,12 +242,14 @@ class SequenceProcessor(nn.Module):
         chunk_shape=(25, 7, 5, 32),  # (C, H, W, T) per chunk
         embedding_dim=128,
         codebook_size=512,
-        num_downsample_stages=3
+        num_downsample_stages=3,
+        use_quantizer=True
     ):
         super().__init__()
         
         self.chunk_shape = chunk_shape
         self.embedding_dim = embedding_dim
+        self.use_quantizer = use_quantizer
         
         # Create chunk autoencoder
         self.chunk_ae = VQVAE(
@@ -250,7 +257,8 @@ class SequenceProcessor(nn.Module):
             input_spatial=chunk_shape[1:],  # (H, W, T)
             embedding_dim=embedding_dim,
             codebook_size=codebook_size,
-            num_downsample_stages=num_downsample_stages
+            num_downsample_stages=num_downsample_stages,
+            use_quantizer=use_quantizer
         )
         
         # Positional embeddings (will be adjusted dynamically)
@@ -314,7 +322,6 @@ class SequenceProcessor(nn.Module):
         return chunks_recon, vq_loss, indices
 
 
-# Helper class (you'll need to define this based on your VectorQuantizer implementation)
 class VectorQuantizer(nn.Module):
     def __init__(self, num_embeddings, embedding_dim, commitment_cost=0.25, decay=0.99, eps=1e-5):
         super().__init__()

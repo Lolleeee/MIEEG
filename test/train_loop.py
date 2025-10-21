@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 from packages.models.vqae import VQVAE, SequenceProcessor
 from packages.train.loss import VQVAELoss, SequenceVQVAELoss
 
-model = SequenceProcessor(chunk_shape=(50, 7, 5, 25))
+model = SequenceProcessor(chunk_shape=(50, 7, 5, 25), use_quantizer=False)
 
 
 
