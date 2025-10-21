@@ -1,46 +1,7 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
-
-class VectorQuantizer(nn.Module):
-    """Discrete codebook for VQ-VAE"""
-    def __init__(self, num_embeddings=512, embedding_dim=128):
-        super().__init__()
-        self.embedding_dim = embedding_dim
-        self.num_embeddings = num_embeddings
-        
-        self.embedding = nn.Embedding(num_embeddings, embedding_dim)
-        self.embedding.weight.data.uniform_(-1/num_embeddings, 1/num_embeddings)
-    
-    def forward(self, z):
-        # z: (B, embedding_dim)
-        # Compute distances to codebook
-        distances = (
-            torch.sum(z**2, dim=1, keepdim=True)
-            + torch.sum(self.embedding.weight**2, dim=1)
-            - 2 * torch.matmul(z, self.embedding.weight.t())
-        )
-        
-        # Find nearest codebook entry
-        encoding_indices = torch.argmin(distances, dim=1)
-        quantized = self.embedding(encoding_indices)
-        
-        # Straight-through estimator
-        quantized = z + (quantized - z).detach()
-        
-        # VQ loss
-        e_latent_loss = F.mse_loss(quantized.detach(), z)
-        q_latent_loss = F.mse_loss(quantized, z.detach())
-        loss = q_latent_loss + 0.25 * e_latent_loss
-        
-        return quantized, loss, encoding_indices
-
-
-import torch
-import torch.nn as nn
 import math
-
+import torch.nn.functional as F
 
 class VQVAE(nn.Module):
     """
@@ -336,7 +297,7 @@ class SequenceProcessor(nn.Module):
         
         # Decode each chunk
         chunks_recon = self.chunk_ae.decode(embeddings_flat)
-        
+
         # Reshape back to sequence
         chunks_recon = chunks_recon.view(batch_size, num_chunks, *self.chunk_shape)
         
@@ -355,47 +316,64 @@ class SequenceProcessor(nn.Module):
 
 # Helper class (you'll need to define this based on your VectorQuantizer implementation)
 class VectorQuantizer(nn.Module):
-    """Simple vector quantizer."""
-    def __init__(self, num_embeddings, embedding_dim, commitment_cost=0.25):
+    def __init__(self, num_embeddings, embedding_dim, commitment_cost=0.25, decay=0.99, eps=1e-5):
         super().__init__()
         self.embedding_dim = embedding_dim
         self.num_embeddings = num_embeddings
         self.commitment_cost = commitment_cost
-        
-        self.embedding = nn.Embedding(num_embeddings, embedding_dim)
-        self.embedding.weight.data.uniform_(-1/num_embeddings, 1/num_embeddings)
-    
+        self.decay = decay
+        self.eps = eps
+
+        self.embedding = nn.Parameter(torch.randn(num_embeddings, embedding_dim))
+        self.register_buffer("ema_cluster_size", torch.zeros(num_embeddings))
+        self.register_buffer("ema_w", torch.randn(num_embeddings, embedding_dim))
+
     def forward(self, z):
-        """
-        Input: (B, D)
-        Output: (z_q, loss, indices)
-        """
-        # Flatten input if needed
+        # Flatten input
         flat_z = z.view(-1, self.embedding_dim)
-        
-        # Calculate distances
+
+        # Compute distances to embeddings
         distances = (
-            torch.sum(flat_z**2, dim=1, keepdim=True) +
-            torch.sum(self.embedding.weight**2, dim=1) -
-            2 * torch.matmul(flat_z, self.embedding.weight.t())
+            torch.sum(flat_z ** 2, dim=1, keepdim=True)
+            + torch.sum(self.embedding ** 2, dim=1)
+            - 2 * torch.matmul(flat_z, self.embedding.t())
         )
-        
-        # Get closest codebook entry
+
+        # Get closest embedding index for each input
         indices = torch.argmin(distances, dim=1)
-        z_q = self.embedding(indices)
-        
-        # Calculate loss
-        e_latent_loss = torch.mean((z_q.detach() - flat_z)**2)
-        q_latent_loss = torch.mean((z_q - flat_z.detach())**2)
-        loss = q_latent_loss + self.commitment_cost * e_latent_loss
-        
+        encodings = F.one_hot(indices, self.num_embeddings).type(flat_z.dtype)
+
+        # Quantized latent vectors
+        z_q = torch.matmul(encodings, self.embedding)
+
+        # EMA updates (no gradients)
+        if self.training:
+            # Update cluster size counts
+            self.ema_cluster_size = self.ema_cluster_size * self.decay + \
+                                    (1 - self.decay) * torch.sum(encodings, dim=0)
+
+            # Update embedding averages
+            dw = torch.matmul(encodings.t(), flat_z)
+            self.ema_w = self.ema_w * self.decay + (1 - self.decay) * dw
+
+            # Normalize so small clusters don’t die
+            n = torch.sum(self.ema_cluster_size)
+            cluster_size = (
+                (self.ema_cluster_size + self.eps)
+                / (n + self.num_embeddings * self.eps)
+                * n
+            )
+            self.embedding.data = self.ema_w / cluster_size.unsqueeze(1)
+
+        # Compute commitment loss
+        loss = self.commitment_cost * torch.mean((z_q.detach() - flat_z) ** 2)
+
         # Straight-through estimator
         z_q = flat_z + (z_q - flat_z).detach()
-        
-        # Reshape to match input
-        z_q = z_q.view(z.shape)
-        
+        z_q = z_q.view_as(z)
+
         return z_q, loss, indices
+
 
 
 # Example usage
@@ -569,3 +547,6 @@ with torch.no_grad():
     embeddings, _, _ = model.encode_sequence(chunks)
     # embeddings: (B, 8, 128) ready for transformer!
     """)
+
+
+    print(model)

@@ -33,7 +33,7 @@ mae = torch.nn.L1Loss
 
 config = {
     'batch_size': 2,
-    'lr': 1e-4,
+    'lr': 1e-3,
     'epochs': 100,
     # 'EarlyStopping' : {'patience': 10000, 'min_delta': 0.0},
     # 'BackupManager': {'backup_interval': 100000, 'backup_path': './model_backups'},
@@ -41,7 +41,7 @@ config = {
     'history_plot': {'plot_type': 'extended', 'save_path': './training_history'},
     'grad_clip': 1.0,
     'use_amp': False,
-    'grad_logging_interval': 10    
+    'grad_logging_interval': None   
 }
 
 metrics = {}
@@ -49,8 +49,11 @@ metrics = {}
 # dataset = CustomTestDataset(root_folder=dataset_path, nsamples=10)
 dataset = TorchDataset("/home/lolly/Desktop/test", chunk_size=25)
 
-train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.1, 'val': 0.1}, norm_axes=(0, 1, 5), batch_size=2)
+train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.9, 'val': 0.1}, batch_size=32)
 print(next(iter(train_loader)).shape)
 print("\nStarting dummy training loop...")
+print(model)
 
+from packages.plotting.tensor_plots import plot_dimension_distribuitions
+#plot_dimension_distribuitions(next(iter(train_loader))[0, 0, ...])
 model = train_model(model, train_loader=train_loader, val_loader=val_loader, loss_criterion=criterion, optimizer=optimizer, config=config, metrics=metrics)
