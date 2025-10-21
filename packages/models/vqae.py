@@ -100,7 +100,6 @@ class DecoderBlock(nn.Module):
         # Adjust to exact target shape if needed
         if self.target_shape is not None:
             current_shape = x.shape[2:]  # (H, W, T)
-            print(current_shape)
             if current_shape != self.target_shape:
                 # Use trilinear interpolation to reach exact size
                 x = F.interpolate(
