@@ -170,6 +170,8 @@ class TorchDataset(Dataset, BasicDataset):
 
         if self.chunk_size is not None:
             data = self._get_chunks(data)
+        
+
         return data.float()
 
     def _normalize_item(self, item):

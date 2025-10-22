@@ -12,10 +12,14 @@ def autoencoder_test_plots(model, loader, nsamples=5):
         if inputs.shape[0] > nsamples:
             inputs = inputs[:nsamples, ...]
             outputs = model(inputs)
+            if isinstance(outputs, (list, tuple)):
+                outputs = outputs[0]
             outputs = torch.cat((outputs, outputs), dim=0)
             break
         else:
             output = model(inputs)
+            if isinstance(output, (list, tuple)):
+                output = output[0]
             nsamples -= inputs.shape[0]
             outputs = torch.cat((outputs, output), dim=0)
             if nsamples <= 0:
@@ -23,7 +27,9 @@ def autoencoder_test_plots(model, loader, nsamples=5):
     rand_idx = np.random.randint(0, inputs.shape[0])
     single_input = inputs[rand_idx, ...].unsqueeze(0)
     single_output = model(single_input)
-    
+    if isinstance(single_output, (list, tuple)):
+        single_output = single_output[0]
+        
     plot_reconstruction_scatter(inputs, outputs)
     plot_reconstruction_distribution(inputs, outputs)
 

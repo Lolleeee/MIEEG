@@ -106,68 +106,106 @@ def plot_reconstruction_scatter(
 
 def plot_reconstruction_slices(
     original: Union[np.ndarray, torch.Tensor],
-    reconstructed: Union[np.ndarray, torch.Tensor], freqs: List[int] = None
+    reconstructed: Union[np.ndarray, torch.Tensor], 
+    freqs: List[int] = None,
+    n_channels: int = 4
 ) -> None:
     """
     Plots slices of the original and reconstructed 4D signals for visual comparison.
     Concats the second and third dimensions which correspond to EEG channels.
     Selects 3 indexes in the middle of the frequency (first) dimension like [11, 12, 13].
-    Then for 4 random channels the reconstruction vs the original is plotted.
+    Then for n_channels random channels the reconstruction vs the original is plotted.
+    
+    Args:
+        original: 4D array (freq, channels, channels, time)
+        reconstructed: 4D array (freq, channels, channels, time)
+        freqs: List of 3 frequency indices to plot. If None, uses middle frequencies.
+        n_channels: Number of random channels to plot (default: 4)
     """
+    import matplotlib.pyplot as plt
+    
     if isinstance(original, torch.Tensor):
         original = original.cpu().detach().numpy()
     if isinstance(reconstructed, torch.Tensor):
         reconstructed = reconstructed.cpu().detach().numpy()
     
     assert original.shape == reconstructed.shape, "Original and reconstructed shapes must match."
-    if len(original.shape) > 4 or len(reconstructed.shape) > 4:
-        try:
-            original = original.squeeze()
-            reconstructed = reconstructed.squeeze()
-        except:
-            raise ValueError("Input data must be 4D (freq, channels, channels, time), couldn't squeeze.")
+    
+    # Handle batch dimension or extra dimensions
+    if len(original.shape) > 4:
+        original = original.squeeze()
+        reconstructed = reconstructed.squeeze()
         
+    if len(original.shape) > 4 or len(original.shape) < 4:
+        original = original[0, ...] if len(original.shape) > 4 else original
+        reconstructed = reconstructed[0, ...] if len(reconstructed.shape) > 4 else reconstructed
+    
     assert len(original.shape) == 4, "Input data must be 4D (freq, channels, channels, time)."
+    
     freq_dim, ch1_dim, ch2_dim, time_dim = original.shape
+    
+    # Determine frequency indices
     if freqs is not None:
+        assert len(freqs) == 3, "Must provide exactly 3 frequency indices"
         assert all(0 <= f < freq_dim for f in freqs), "Frequency indices out of bounds."
         freq_indices = freqs
     else:
         mid_freq = freq_dim // 2
         freq_indices = [mid_freq - 1, mid_freq, mid_freq + 1]
-    combined_original = original[:, :, :, :].reshape(freq_dim, ch1_dim * ch2_dim, time_dim)
-    combined_reconstructed = reconstructed[:, :, :, :].reshape(freq_dim, ch1_dim * ch2_dim, time_dim)
-    random_channels = np.random.choice(ch1_dim * ch2_dim, size=4, replace=False)
-    plt.figure(figsize=(15, 10))
+    
+    # Reshape to combine channel dimensions
+    combined_original = original.reshape(freq_dim, ch1_dim * ch2_dim, time_dim)
+    combined_reconstructed = reconstructed.reshape(freq_dim, ch1_dim * ch2_dim, time_dim)
+    
+    # Select random channels
+    total_channels = ch1_dim * ch2_dim
+    n_channels = min(n_channels, total_channels)  # Don't exceed available channels
+    random_channels = np.random.choice(total_channels, size=n_channels, replace=False)
+    
+    # Calculate grid dimensions
+    # Each channel gets 3 plots (one per frequency), arranged horizontally
+    n_cols = 3
+    n_rows = n_channels
+    
+    # Dynamic figure height based on number of channels
+    fig_height = max(3 * n_rows, 10)
+    fig_width = 15
+    
+    plt.figure(figsize=(fig_width, fig_height))
+    
     for i, ch in enumerate(random_channels):
-        plt.subplot(4, 3, i * 3 + 1)
+        # Plot frequency 1
+        plt.subplot(n_rows, n_cols, i * n_cols + 1)
         plt.plot(combined_original[freq_indices[0], ch, :], label="Original", color="blue")
         plt.plot(combined_reconstructed[freq_indices[0], ch, :], label="Reconstructed", color="orange", alpha=0.7)
-        plt.title(f"Channel {ch} - Frequency Index {freq_indices[0]}")
+        plt.title(f"Channel {ch} - Freq {freq_indices[0]}")
         plt.xlabel("Time")
         plt.ylabel("Amplitude")
         if i == 0:
             plt.legend()
         plt.grid(True)
-
-        plt.subplot(4, 3, i * 3 + 2)
+        
+        # Plot frequency 2
+        plt.subplot(n_rows, n_cols, i * n_cols + 2)
         plt.plot(combined_original[freq_indices[1], ch, :], label="Original", color="blue")
         plt.plot(combined_reconstructed[freq_indices[1], ch, :], label="Reconstructed", color="orange", alpha=0.7)
-        plt.title(f"Channel {ch} - Frequency Index {freq_indices[1]}")
+        plt.title(f"Channel {ch} - Freq {freq_indices[1]}")
         plt.xlabel("Time")
         plt.ylabel("Amplitude")
         if i == 0:
             plt.legend()
         plt.grid(True)
-
-        plt.subplot(4, 3, i * 3 + 3)
+        
+        # Plot frequency 3
+        plt.subplot(n_rows, n_cols, i * n_cols + 3)
         plt.plot(combined_original[freq_indices[2], ch, :], label="Original", color="blue")
         plt.plot(combined_reconstructed[freq_indices[2], ch, :], label="Reconstructed", color="orange", alpha=0.7)
-        plt.title(f"Channel {ch} - Frequency Index {freq_indices[2]}")
+        plt.title(f"Channel {ch} - Freq {freq_indices[2]}")
         plt.xlabel("Time")
         plt.ylabel("Amplitude")
         if i == 0:
             plt.legend()
         plt.grid(True)
+    
     plt.tight_layout()
     plt.show()

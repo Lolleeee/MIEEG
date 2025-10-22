@@ -48,3 +48,23 @@ CHANNELS_32 = np.array(
         "PO10",
     ]
 )
+
+
+if __name__ == "__main__":
+    matrix = SPATIAL_DOMAIN_MATRIX_32
+    import torch
+    shape = matrix.shape
+    num = shape[0] * shape[1]
+    matrix_tensor = torch.arange(num, dtype=torch.float32).reshape(shape)
+    combined_channels = matrix_tensor.reshape(matrix_tensor.shape[0] * matrix_tensor.shape[1]) 
+    print(matrix_tensor)
+    print(combined_channels)
+
+    x = np.load("/home/lolly/Projects/MIEEG/test/test_output/TEST_SAMPLE_FOLDER/TEST_SAMPLE2 (Copy).npz")
+    x = x['data']
+    x = torch.Tensor(x)
+    from packages.plotting.reconstruction_plots import plot_reconstruction_slices
+    x = x[:,:,:, 32:64]
+    print(x.shape)
+    plot_reconstruction_slices(x, x, n_channels=6)
+    

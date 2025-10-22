@@ -33,68 +33,69 @@ def _get_set_sizes(sets_size, dataset, indices):
 
     return train_idx, val_idx, test_idx
 
-def _calc_norm_params(train_loader, axes):
+def _calc_norm_params(train_loader, axes, norm_params=None):
     """
     Calculate global mean and std using batched Welford's algorithm.
     Faster and more memory efficient.
     Axes specifies the the dimensions to calculate the mean and std across, note that tensor shape is [batch, ...]
     """
-    item_shape = None
+    sample_batch = next(iter(train_loader))
+    if isinstance(sample_batch, (list, tuple)):
+        sample_batch = sample_batch[0]
+    if isinstance(sample_batch, np.ndarray):
+        sample_batch = torch.from_numpy(sample_batch)
+
+    batch_size = sample_batch.size(0)
+    item_shape = sample_batch.shape[0:]
 
     n = 0
     mean = None
     M2 = None
-    for batch in tqdm(train_loader, desc="Calculating global parameters"):
-        # Handle tuple outputs
-        if isinstance(batch, (list, tuple)):
-            batch = batch[0]
-        
-        if isinstance(batch, np.ndarray):
-            batch = torch.from_numpy(batch)
 
-        batch_size = batch.size(0)
-        if item_shape is None:
-            item_shape = batch.shape[0:]
-        # Compute batch statistics
-        batch_mean = batch.mean(dim=axes)
-        batch_var = batch.var(dim=axes, unbiased=False)
-        
-        if mean is None:
-            mean = batch_mean
-            M2 = batch_var * batch_size
-            n = batch_size
-        else:
-            # Combine batch stats with running stats
-            delta = batch_mean - mean
-            new_n = n + batch_size
+    if norm_params is None:
+        for batch in tqdm(train_loader, desc="Calculating global parameters"):
+
+            batch_mean = batch.mean(dim=axes)
+            batch_var = batch.var(dim=axes, unbiased=False)
             
-            mean = (n * mean + batch_size * batch_mean) / new_n
-            M2 = M2 + batch_var * batch_size + delta ** 2 * n * batch_size / new_n
-            n = new_n
-    if n < 2:
-        return mean, torch.zeros_like(mean)
-    
-    variance = M2 / n
-    std = torch.sqrt(variance)
-
-    
-    item_ndim = len(item_shape)
-    reshape_dims = []
-
-    mean_idx = 0
-    for dim in range(item_ndim):
-        if dim != 0: # Batch dim was averaged but the norm happens without batch dim
-            if dim in axes:
-                # This dimension was averaged, use 1 for broadcasting
-                reshape_dims.append(1)
+            if mean is None:
+                mean = batch_mean
+                M2 = batch_var * batch_size
+                n = batch_size
             else:
-                # This dimension was kept, use the actual size
-                reshape_dims.append(mean.shape[mean_idx])
-                mean_idx += 1
+                # Combine batch stats with running stats
+                delta = batch_mean - mean
+                new_n = n + batch_size
+                
+                mean = (n * mean + batch_size * batch_mean) / new_n
+                M2 = M2 + batch_var * batch_size + delta ** 2 * n * batch_size / new_n
+                n = new_n
+        if n < 2:
+            return mean, torch.zeros_like(mean)
+        
+        variance = M2 / n
+        std = torch.sqrt(variance)
+        item_ndim = len(item_shape)
+        reshape_dims = []
 
-    mean = mean.view(*reshape_dims)
-    std = std.view(*reshape_dims)
-    print(f"Calculated mean shape: {mean.shape}, std shape: {std.shape}")
+        mean_idx = 0
+        for dim in range(item_ndim):
+            if dim != 0: # Batch dim was averaged but the norm happens without batch dim
+                if dim in axes:
+                    # This dimension was averaged, use 1 for broadcasting
+                    reshape_dims.append(1)
+                else:
+                    # This dimension was kept, use the actual size
+                    reshape_dims.append(mean.shape[mean_idx])
+                    mean_idx += 1
+
+        mean = mean.view(*reshape_dims)
+        std = std.view(*reshape_dims)
+        print(f"Calculated mean shape: {mean.shape}, std shape: {std.shape}")
+    else:
+        mean, std = norm_params
+        print(f"Using provided mean {mean} and std {std} for normalization.")
+
     return mean, std
 
 
@@ -105,8 +106,13 @@ def get_data_loaders(
     sets_size: dict = {"train": 0.6, "val": 0.2, "test": 0.2},
     num_workers: int = 4,
     norm_axes: Tuple[int] = None,
+    norm_params: Tuple[float, float] = None,
 ) -> DataLoader:
-    
+    '''
+    norm_params : (mean, std) to use for normalization, if None, calculate from training set. they'll be casted to tensors
+    and stored in dataset._norm_params based on norm_axes
+    norm_axes : axes to calculate normalization across, e.g. (0, 2, 3) to normalize across batch, height and width for 4D tensors [batch, channels, height, width]
+    '''
     indices = np.arange(len(dataset))
 
     np.random.seed(RANDOM_SEED)
@@ -122,7 +128,7 @@ def get_data_loaders(
             num_workers=num_workers,
         )
 
-        mean, std = _calc_norm_params(temp_train_loader, axes=norm_axes)
+        mean, std = _calc_norm_params(temp_train_loader, axes=norm_axes, norm_params=norm_params)
 
         dataset._norm_params = (mean, std)
 
