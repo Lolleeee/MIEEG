@@ -77,19 +77,13 @@ print("\nStarting dummy training loop...")
 
 from packages.train.testing import autoencoder_test_plots
 
-# model = train_model(model, train_loader=train_loader, val_loader=val_loader, loss_criterion=criterion, optimizer=optimizer, config=config, metrics=metrics)
-# sys.exit(0)
+model = train_model(model, train_loader=train_loader, val_loader=val_loader, loss_criterion=criterion, optimizer=optimizer, config=config, metrics=metrics)
+sys.exit(0)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 x = next(iter(train_loader)).to(device)
 x = x[0, ...].unsqueeze(0) 
 print(f"x shape: {x.shape}")
-# normalize x to [0,1] using min/max computed over dims 2,3,4 (per-sample, per-channel)
-#eps = 1e-8
-#min_vals = x.amin(dim=(2, 3, 4), keepdim=True)
-#max_vals = x.amax(dim=(2, 3, 4), keepdim=True)
-#x = (x - min_vals) / (max_vals - min_vals + eps)
 
-#criterion = torch.nn.MSELoss()
 losses = []
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 for i in range(500):
@@ -100,37 +94,23 @@ for i in range(500):
     loss.backward()
     if i % 50 == 0:
         print(i, loss.item())
-            # print per-parameter and total grad norms
-        """
-        _total_sq = 0.0
-        for _name, _param in model.named_parameters():
-            if _param.grad is None:
-                _g = 0.0
-            else:
-                _g = _param.grad.detach().float().norm(2).item()
-                _total_sq += _g * _g
-            print(f"{_name}: grad_norm={_g:.6f}")
-        _total_norm = _total_sq ** 0.5
-        print(f"total_grad_norm: {_total_norm:.6f}")
-        """
+
     optimizer.step()
 
     losses.append(loss.item())
 
     # plot and save loss curve
-    import matplotlib.pyplot as plt
-    plt.figure()
-    plt.plot(losses, marker='.', linewidth=1, label='train_loss')
-    plt.xlabel('Iteration')
-    plt.ylabel('Loss')
-    plt.title('Training Loss')
-    plt.grid(True)
-    plt.legend()
-    plt.show()
+import matplotlib.pyplot as plt
+plt.figure()
+plt.plot(losses, marker='.', linewidth=1, label='train_loss')
+plt.xlabel('Iteration')
+plt.ylabel('Loss')
+plt.title('Training Loss')
+plt.grid(True)
+plt.legend()
+plt.show()
     
 from packages.plotting.reconstruction_plots import plot_reconstruction_slices
-import numpy as np
-
 out = model(x)
 
 rec = out[0]
