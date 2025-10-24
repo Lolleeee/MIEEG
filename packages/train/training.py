@@ -107,7 +107,7 @@ def _train_loop(model, train_loader, loss_criterion, optimizer, device, history,
     gradient_logger = GradientLogger(interval=gradient_logger_interval)
     with tqdm(desc="Training Batches", total=len(train_loader), position=1, leave=True) as batchpbar:
         for batch in train_loader:
-            
+            print(batch.shape)
             batch = batch.to(device)
             optimizer.zero_grad()
             
@@ -128,9 +128,10 @@ def _train_loop(model, train_loader, loss_criterion, optimizer, device, history,
             batchpbar.update()
             batchpbar.set_postfix({'Batch Loss': loss.item()})
         train_loss /= len(train_loader.dataset)
+        batchpbar.set_postfix({'Epoch Loss': train_loss})
         task_handler._end_epoch(len(train_loader.dataset))
         history.log_train(train_loss, task_handler.evals)
-            
+        print(optimizer.param_groups[0]['lr'])
 
 def _eval_loop(model, val_loader, loss_criterion, device, history, task_handler: TaskHandler):
     """
@@ -196,7 +197,7 @@ def train_model(model, train_loader, val_loader, loss_criterion, optimizer, metr
     model = _check_precision(model, train_loader, val_loader)
 
     optimizer = _optimizer_setup(optimizer, config, model)
-
+    print(optimizer.param_groups[0]['lr'])
     # Convert loss criterion and metrics to instances if they are not already
     if isinstance(loss_criterion, type): 
         loss_criterion = loss_criterion()

@@ -2,24 +2,49 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-
-
-class PixelShuffle3d(nn.Module):
-    """3D Pixel Shuffle for upsampling."""
-    def __init__(self, upscale_factor):
+class VectorQuantizer(nn.Module):
+    """EMA-based Vector Quantizer"""
+    def __init__(self, num_embeddings, embedding_dim, commitment_cost=0.25, decay=0.99, eps=1e-5):
         super().__init__()
-        self.upscale_factor = upscale_factor
-        
-    def forward(self, x):
-        batch_size, channels, d, h, w = x.size()
-        r = self.upscale_factor
-        out_channels = channels // (r ** 3)
-        x = x.view(batch_size, out_channels, r, r, r, d, h, w)
-        x = x.permute(0, 1, 5, 2, 6, 3, 7, 4).contiguous()
-        x = x.view(batch_size, out_channels, d * r, h * r, w * r)
-        return x
+        self.embedding_dim = embedding_dim
+        self.num_embeddings = num_embeddings
+        self.commitment_cost = commitment_cost
+        self.decay = decay
+        self.eps = eps
 
+        self.embedding = nn.Parameter(torch.randn(num_embeddings, embedding_dim))
+        self.register_buffer("ema_cluster_size", torch.zeros(num_embeddings))
+        self.register_buffer("ema_w", torch.randn(num_embeddings, embedding_dim))
 
+    def forward(self, z):
+        flat_z = z.view(-1, self.embedding_dim)
+        distances = (
+            torch.sum(flat_z ** 2, dim=1, keepdim=True)
+            + torch.sum(self.embedding ** 2, dim=1)
+            - 2 * torch.matmul(flat_z, self.embedding.t())
+        )
+        indices = torch.argmin(distances, dim=1)
+        encodings = F.one_hot(indices, self.num_embeddings).type(flat_z.dtype)
+        z_q = torch.matmul(encodings, self.embedding)
+
+        if self.training:
+            self.ema_cluster_size = self.ema_cluster_size * self.decay + \
+                                    (1 - self.decay) * torch.sum(encodings, dim=0)
+            dw = torch.matmul(encodings.t(), flat_z)
+            self.ema_w = self.ema_w * self.decay + (1 - self.decay) * dw
+            n = torch.sum(self.ema_cluster_size)
+            cluster_size = (
+                (self.ema_cluster_size + self.eps)
+                / (n + self.num_embeddings * self.eps)
+                * n
+            )
+            self.embedding.data = self.ema_w / cluster_size.unsqueeze(1)
+
+        loss = self.commitment_cost * torch.mean((z_q.detach() - flat_z) ** 2)
+        z_q = flat_z + (z_q - flat_z).detach()
+        z_q = z_q.view_as(z)
+        return z_q, loss, indices
+    
 class DilatedTemporalSmoother(nn.Module):
     """
     Dilated 1D temporal convolutions for smooth temporal transitions.
@@ -104,69 +129,161 @@ class ProgressiveTemporalUpsample(nn.Module):
         for stage in self.stages:
             x = stage(x)
         return x
-
-
-class ProgressiveDecoderBlock(nn.Module):
+    
+class DeepRefinementBlock(nn.Module):
     """
-    Decoder block with progressive temporal upsampling and spatial upsampling.
-    Temporal: Multiple 2x stages with smoothing (gentle, continuous)
-    Spatial: Single stage with nearest neighbor (can be blocky)
+    Deep refinement block with residual connections.
+    Multiple convolution layers for better feature refinement.
+    """
+    def __init__(self, channels, num_layers=3):
+        super().__init__()
+        ngroups = self._get_num_groups(channels)
+        
+        layers = []
+        for i in range(num_layers):
+            layers.extend([
+                nn.Conv3d(channels, channels, kernel_size=3, padding=1, bias=False),
+                nn.GroupNorm(ngroups, channels),
+                nn.GELU()
+            ])
+        
+        self.refinement = nn.Sequential(*layers)
+        
+        # Residual connection
+        self.gamma = nn.Parameter(torch.zeros(1))
+    
+    def _get_num_groups(self, channels):
+        ngroups = min(8, channels)
+        if channels % ngroups != 0:
+            for g in reversed(range(1, ngroups + 1)):
+                if channels % g == 0:
+                    return g
+        return ngroups
+    
+    def forward(self, x):
+        return x + self.gamma * self.refinement(x)
+
+class PowerfulProgressiveDecoderBlock(nn.Module):
+    """
+    Ultra-powerful decoder block with:
+    - Deeper refinement networks
+    - Larger channel capacity
+    - Residual connections
+    - Multi-scale processing
     """
     def __init__(self, in_channels, out_channels, current_shape, target_shape, 
-                 spatial_upscale, temporal_upscale, use_skip=False):
+                 spatial_upscale, temporal_upscale, use_skip=False, 
+                 is_final=False, capacity_multiplier=2):
         super().__init__()
         self.use_skip = use_skip
         self.target_shape = target_shape
         self.spatial_upscale = spatial_upscale
         self.temporal_upscale = temporal_upscale
+        self.is_final = is_final
         
         skip_channels = in_channels if use_skip else 0
-        ngroups = self._get_num_groups(out_channels)
         
-        # Initial conv
+        # Increase capacity - decoder uses MORE channels than encoder
+        expanded_channels = out_channels * capacity_multiplier
+        ngroups = self._get_num_groups(expanded_channels)
+        ngroups_out = self._get_num_groups(out_channels)
+        
+        # Calculate groups for multi-scale refinement
+        multi_scale_channels = expanded_channels // 2
+        ngroups_multi = self._get_num_groups(multi_scale_channels)
+        combined_channels = expanded_channels * 3 // 2
+        ngroups_combined = self._get_num_groups(combined_channels)
+        
+        # STAGE 1: Initial expansion with deep refinement
         self.pre_conv = nn.Sequential(
-            nn.Conv3d(in_channels + skip_channels, out_channels,
+            nn.Conv3d(in_channels + skip_channels, expanded_channels,
                      kernel_size=3, padding=1, bias=False),
-            nn.GroupNorm(ngroups, out_channels),
-            nn.GELU()
+            nn.GroupNorm(ngroups, expanded_channels),
+            nn.GELU(),
+            DeepRefinementBlock(expanded_channels, num_layers=3)
         )
         
-        # Spatial upsampling (can be simple/blocky)
+        # STAGE 2: Spatial upsampling with more capacity
         if spatial_upscale > 1:
             self.spatial_upsample = nn.Sequential(
-                # First, expand channels for spatial upsampling
-                nn.Conv3d(out_channels, out_channels * (spatial_upscale ** 2),
+                nn.Conv3d(expanded_channels, expanded_channels * (spatial_upscale ** 2),
                          kernel_size=3, padding=1, bias=False),
-                # Spatial upsample only (not temporal)
                 nn.Upsample(scale_factor=(spatial_upscale, spatial_upscale, 1), 
                            mode='nearest'),
-                # Pointwise to reduce channels back to out_channels
-                nn.Conv3d(out_channels * (spatial_upscale ** 2), out_channels,
+                nn.Conv3d(expanded_channels * (spatial_upscale ** 2), expanded_channels,
                          kernel_size=1, bias=False),
-                nn.GroupNorm(ngroups, out_channels),  # Now matches out_channels
-                nn.GELU()
+                nn.GroupNorm(ngroups, expanded_channels),
+                nn.GELU(),
+                DeepRefinementBlock(expanded_channels, num_layers=2)
             )
         else:
             self.spatial_upsample = nn.Identity()
         
-        # Progressive temporal upsampling (smooth, gradual)
+        # STAGE 3: Progressive temporal upsampling with deep smoothing
         if temporal_upscale > 1:
-            # Calculate number of 2x stages needed
             num_temporal_stages = int(math.log2(temporal_upscale))
             self.temporal_upsample = ProgressiveTemporalUpsample(
-                out_channels, num_stages=num_temporal_stages
+                expanded_channels, num_stages=num_temporal_stages
             )
         else:
             self.temporal_upsample = nn.Identity()
         
-        # Final refinement
-        self.refine = nn.Sequential(
-            nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
-            nn.GroupNorm(ngroups, out_channels),
+        # STAGE 4: Multi-scale refinement before final output
+        self.multi_scale_refine = nn.ModuleList([
+            # Large receptive field
+            nn.Sequential(
+                nn.Conv3d(expanded_channels, multi_scale_channels,
+                         kernel_size=7, padding=3, bias=False),
+                nn.GroupNorm(ngroups_multi, multi_scale_channels),  
+                nn.GELU()
+            ),
+            # Medium receptive field
+            nn.Sequential(
+                nn.Conv3d(expanded_channels, multi_scale_channels,
+                         kernel_size=5, padding=2, bias=False),
+                nn.GroupNorm(ngroups_multi, multi_scale_channels),  
+                nn.GELU()
+            ),
+            # Small receptive field
+            nn.Sequential(
+                nn.Conv3d(expanded_channels, multi_scale_channels,
+                         kernel_size=3, padding=1, bias=False),
+                nn.GroupNorm(ngroups_multi, multi_scale_channels), 
+                nn.GELU()
+            ),
+        ])
+        
+        # Combine multi-scale features
+        self.combine_scales = nn.Sequential(
+            nn.Conv3d(combined_channels, expanded_channels,
+                     kernel_size=1, bias=False),
+            nn.GroupNorm(ngroups, expanded_channels),
             nn.GELU()
         )
         
+        # STAGE 5: Final deep refinement and channel reduction
+        if is_final:
+            self.final_refine = nn.Sequential(
+                DeepRefinementBlock(expanded_channels, num_layers=4),
+                nn.Conv3d(expanded_channels, out_channels, kernel_size=3, 
+                         padding=1, bias=False),
+                nn.GroupNorm(ngroups_out, out_channels),
+                DeepRefinementBlock(out_channels, num_layers=3),
+                # No activation on final output
+                nn.Conv3d(out_channels, out_channels, kernel_size=1, bias=True)
+            )
+        else:
+            self.final_refine = nn.Sequential(
+                DeepRefinementBlock(expanded_channels, num_layers=3),
+                nn.Conv3d(expanded_channels, out_channels, kernel_size=3, 
+                         padding=1, bias=False),
+                nn.GroupNorm(ngroups_out, out_channels),
+                nn.GELU(),
+                DeepRefinementBlock(out_channels, num_layers=2)
+            )
+        
     def _get_num_groups(self, channels):
+        """Calculate valid number of groups for GroupNorm."""
         ngroups = min(8, channels)
         if channels % ngroups != 0:
             for g in reversed(range(1, ngroups + 1)):
@@ -179,75 +296,36 @@ class ProgressiveDecoderBlock(nn.Module):
         if self.use_skip and skip is not None:
             x = torch.cat([x, skip], dim=1)
         
-        # Initial processing
+        # Stage 1: Initial expansion
         x = self.pre_conv(x)
         
-        # Spatial upsampling (fast, can be blocky)
+        # Stage 2: Spatial upsampling
         x = self.spatial_upsample(x)
         
-        # Progressive temporal upsampling (slow, smooth)
+        # Stage 3: Temporal upsampling
         x = self.temporal_upsample(x)
         
-        # Adjust to exact target size if needed
+        # Adjust to target size if needed
         current_shape = x.shape[2:]
         if current_shape != self.target_shape:
             x = F.interpolate(x, size=self.target_shape, mode='trilinear', align_corners=False)
         
-        # Final refinement
-        x = self.refine(x)
+        # Stage 4: Multi-scale refinement
+        scales = [refine(x) for refine in self.multi_scale_refine]
+        x_multi = torch.cat(scales, dim=1)
+        x = x + self.combine_scales(x_multi)  # Residual
+        
+        # Stage 5: Final refinement
+        x = self.final_refine(x)
         
         return x
 
-
-class VectorQuantizer(nn.Module):
-    """EMA-based Vector Quantizer"""
-    def __init__(self, num_embeddings, embedding_dim, commitment_cost=0.25, decay=0.99, eps=1e-5):
-        super().__init__()
-        self.embedding_dim = embedding_dim
-        self.num_embeddings = num_embeddings
-        self.commitment_cost = commitment_cost
-        self.decay = decay
-        self.eps = eps
-
-        self.embedding = nn.Parameter(torch.randn(num_embeddings, embedding_dim))
-        self.register_buffer("ema_cluster_size", torch.zeros(num_embeddings))
-        self.register_buffer("ema_w", torch.randn(num_embeddings, embedding_dim))
-
-    def forward(self, z):
-        flat_z = z.view(-1, self.embedding_dim)
-        distances = (
-            torch.sum(flat_z ** 2, dim=1, keepdim=True)
-            + torch.sum(self.embedding ** 2, dim=1)
-            - 2 * torch.matmul(flat_z, self.embedding.t())
-        )
-        indices = torch.argmin(distances, dim=1)
-        encodings = F.one_hot(indices, self.num_embeddings).type(flat_z.dtype)
-        z_q = torch.matmul(encodings, self.embedding)
-
-        if self.training:
-            self.ema_cluster_size = self.ema_cluster_size * self.decay + \
-                                    (1 - self.decay) * torch.sum(encodings, dim=0)
-            dw = torch.matmul(encodings.t(), flat_z)
-            self.ema_w = self.ema_w * self.decay + (1 - self.decay) * dw
-            n = torch.sum(self.ema_cluster_size)
-            cluster_size = (
-                (self.ema_cluster_size + self.eps)
-                / (n + self.num_embeddings * self.eps)
-                * n
-            )
-            self.embedding.data = self.ema_w / cluster_size.unsqueeze(1)
-
-        loss = self.commitment_cost * torch.mean((z_q.detach() - flat_z) ** 2)
-        z_q = flat_z + (z_q - flat_z).detach()
-        z_q = z_q.view_as(z)
-        return z_q, loss, indices
-
-
 class VQVAE(nn.Module):
     """
-    VQ-VAE with progressive temporal upsampling for smooth reconstructions.
-    - Spatial: Single-stage upsampling (can be blocky)
-    - Temporal: Multi-stage progressive upsampling (smooth, continuous)
+    VQ-VAE with asymmetric architecture:
+    - Lightweight encoder (just compress)
+    - POWERFUL decoder (reconstruct details)
+    - Single embedding vector per chunk (for transformers)
     """
     def __init__(
         self,
@@ -257,7 +335,8 @@ class VQVAE(nn.Module):
         codebook_size=512,
         num_downsample_stages=3,
         use_quantizer=True,
-        use_skip_connections=False
+        use_skip_connections=False,
+        decoder_capacity_multiplier=2
     ):
         super().__init__()
         
@@ -267,13 +346,14 @@ class VQVAE(nn.Module):
         self.num_stages = num_downsample_stages
         self.use_quantizer = use_quantizer
         self.use_skip_connections = use_skip_connections
+        self.decoder_capacity_multiplier = decoder_capacity_multiplier
 
-        # Encoder configuration
+        # Encoder configuration (lightweight)
         self.encoder_config = self._plan_encoder_stages(
             input_spatial, num_downsample_stages
         )
         
-        # Build encoder
+        # Build encoder (same as before - lightweight)
         self.encoder = self._build_encoder(in_channels, self.encoder_config)
         
         # Bottleneck
@@ -283,12 +363,13 @@ class VQVAE(nn.Module):
         self.final_shape = final_shape
         self.final_channels = final_channels
         
-        # Embedding layers
+        # ✅ NEW: Flatten to single embedding vector
         self.to_embedding = nn.Sequential(
-            nn.Flatten(),
+            nn.Flatten(),  # (B, C, H, W, T) -> (B, C*H*W*T)
             nn.Linear(self.flat_size, embedding_dim * 2),
             nn.LayerNorm(embedding_dim * 2),
             nn.GELU(),
+            nn.Dropout(0.1),
             nn.Linear(embedding_dim * 2, embedding_dim)
         )
         
@@ -297,22 +378,20 @@ class VQVAE(nn.Module):
             embedding_dim=embedding_dim
         )
         
+        # ✅ NEW: Expand from single vector back to spatial
         self.from_embedding = nn.Sequential(
             nn.Linear(embedding_dim, embedding_dim * 2),
             nn.LayerNorm(embedding_dim * 2),
             nn.GELU(),
+            nn.Dropout(0.1),
             nn.Linear(embedding_dim * 2, self.flat_size)
         )
         
-        # Build progressive decoder
+        # Build POWERFUL progressive decoder
         self.decoder_blocks = self._build_decoder(in_channels, self.encoder_config)
         
-        self.output_layer = nn.Conv3d(
-            in_channels, in_channels,
-            kernel_size=3, padding=1, bias=True  # bias=True for output layer
-        )
     def _plan_encoder_stages(self, input_spatial, num_stages):
-        """Plan encoder stages."""
+        """Plan encoder stages (same as before)."""
         config = []
         current_shape = list(input_spatial)
         base_channels = 64
@@ -340,7 +419,7 @@ class VQVAE(nn.Module):
         return config
     
     def _build_encoder(self, in_channels, config):
-        """Build encoder."""
+        """Build encoder (lightweight)."""
         layers = []
         for i, stage in enumerate(config):
             in_ch = in_channels if i == 0 else config[i-1]['out_channels']
@@ -354,7 +433,7 @@ class VQVAE(nn.Module):
         return nn.Sequential(*layers)
     
     def _build_decoder(self, out_channels, encoder_config):
-        """Build progressive decoder with separate spatial/temporal upsampling."""
+        """Build POWERFUL decoder."""
         blocks = nn.ModuleList()
         decoder_config = list(reversed(encoder_config))
         
@@ -373,14 +452,16 @@ class VQVAE(nn.Module):
             target_shape = stage['input_shape']
             stride = stage['stride']
             
-            # Separate spatial and temporal upscale factors
-            spatial_upscale = stride[0]  # H, W (same stride)
-            temporal_upscale = stride[2]  # T
+            spatial_upscale = stride[0]
+            temporal_upscale = stride[2]
+            is_final = (i == len(decoder_config) - 1)
             
-            blocks.append(ProgressiveDecoderBlock(
+            blocks.append(PowerfulProgressiveDecoderBlock(
                 in_ch, out_ch, current_shape, target_shape,
                 spatial_upscale, temporal_upscale,
-                use_skip=self.use_skip_connections
+                use_skip=self.use_skip_connections,
+                is_final=is_final,
+                capacity_multiplier=self.decoder_capacity_multiplier
             ))
         
         return blocks
@@ -399,28 +480,44 @@ class VQVAE(nn.Module):
         return features
     
     def encode(self, x):
-        """Encode input."""
+        """
+        Encode input to single embedding vector.
+        
+        Input: (B, in_channels, H, W, T)
+        Output: (B, embedding_dim) - single vector per chunk
+        """
         if self.use_skip_connections:
             encoder_features = self._get_encoder_features(x)
-            z = encoder_features[-1]
+            z = encoder_features[-1]  # (B, C, H, W, T)
             self._encoder_features = encoder_features
         else:
-            z = self.encoder(x)
+            z = self.encoder(x)  # (B, C, H, W, T)
             self._encoder_features = None
         
-        z = self.to_embedding(z)
+        # ✅ Flatten to single vector
+        z = self.to_embedding(z)  # (B, embedding_dim)
 
         if self.use_quantizer:
-            z_q, vq_loss, indices = self.vq(z)
+            z_q, vq_loss, indices = self.vq(z)  # Input: (B, embedding_dim)
         else:
-            z_q, vq_loss, indices = z, torch.tensor(0., device=z.device), None
+            z_q = z
+            vq_loss = torch.tensor(0., device=z.device)
+            indices = None
         
         return z_q, vq_loss, indices
     
     def decode(self, z_q):
-        """Decode with progressive upsampling."""
-        z = self.from_embedding(z_q)
-        z = z.view(-1, self.final_channels, *self.final_shape)
+        """
+        Decode from single embedding vector.
+        
+        Input: (B, embedding_dim) - single vector
+        Output: (B, in_channels, H, W, T)
+        """
+        # ✅ Expand from single vector to spatial
+        z = self.from_embedding(z_q)  # (B, flat_size)
+        
+        # Reshape to spatial feature map
+        z = z.view(-1, self.final_channels, *self.final_shape)  # (B, C, H, W, T)
         
         encoder_features = self._encoder_features if hasattr(self, '_encoder_features') else None
         
@@ -432,8 +529,6 @@ class VQVAE(nn.Module):
             else:
                 z = block(z, None)
         
-        z = self.output_layer(z)
-
         return z
     
     def forward(self, x):
@@ -443,90 +538,5 @@ class VQVAE(nn.Module):
         
         if hasattr(self, '_encoder_features'):
             del self._encoder_features
-        print(f"reconstruction: {x_recon.shape}")
+        
         return x_recon, vq_loss, indices
-    
-class SequenceProcessor(nn.Module):
-    """
-    Process full EEG window as sequence of chunks.
-    Handles arbitrary chunk configurations.
-    
-    Example usage for (25, 7, 5, 250) -> (10, 25, 7, 5, 25):
-        - Original: 25 channels, 7x5 spatial, 250 time samples
-        - Chunked: 10 chunks, 25 channels each, 7x5 spatial, 25 samples per chunk
-    """
-    def __init__(
-        self,
-        chunk_shape=(25, 7, 5, 32),  # (C, H, W, T) per chunk
-        embedding_dim=128,
-        codebook_size=512,
-        num_downsample_stages=3,
-        use_quantizer=True
-    ):
-        super().__init__()
-        
-        self.chunk_shape = chunk_shape
-        self.embedding_dim = embedding_dim
-        self.use_quantizer = use_quantizer
-        
-        # Create chunk autoencoder
-        self.chunk_ae = VQVAE(
-            in_channels=chunk_shape[0],
-            input_spatial=chunk_shape[1:],  # (H, W, T)
-            embedding_dim=embedding_dim,
-            codebook_size=codebook_size,
-            num_downsample_stages=num_downsample_stages,
-            use_quantizer=use_quantizer
-        )
-        
-        # Positional embeddings (will be adjusted dynamically)
-        self.max_chunks = 100  # Support up to 100 chunks
-    
-    def encode_sequence(self, chunks):
-        """
-        Encode sequence of chunks.
-        Input: (B, num_chunks, C, H, W, T)
-        Output: (B, num_chunks, embedding_dim), vq_loss, indices
-        """
-        batch_size, num_chunks = chunks.shape[:2]
-        
-        # Reshape to process all chunks
-        chunks_flat = chunks.view(-1, *self.chunk_shape)
-        
-        # Encode each chunk
-        embeddings, vq_loss, indices = self.chunk_ae.encode(chunks_flat)
-
-        # Reshape back to sequence
-        embeddings = embeddings.view(batch_size, num_chunks, self.embedding_dim)
-        
-        return embeddings, vq_loss, indices
-    
-    def decode_sequence(self, embeddings):
-        """
-        Decode sequence of embeddings back to chunks.
-        Input: (B, num_chunks, embedding_dim)
-        Output: (B, num_chunks, C, H, W, T)
-        """
-        batch_size, num_chunks = embeddings.shape[:2]
-        
-        # Reshape to decode all chunks
-        embeddings_flat = embeddings.view(-1, self.embedding_dim)
-        
-        # Decode each chunk
-        chunks_recon = self.chunk_ae.decode(embeddings_flat)
-
-        # Reshape back to sequence
-        chunks_recon = chunks_recon.view(batch_size, num_chunks, *self.chunk_shape)
-        
-        return chunks_recon
-    
-    def forward(self, chunks):
-        """
-        Full forward pass.
-        Input: (B, num_chunks, C, H, W, T)
-        Output: (reconstruction, vq_loss, indices)
-        """
-        embeddings, vq_loss, indices = self.encode_sequence(chunks)
-        chunks_recon = self.decode_sequence(embeddings)
-        return chunks_recon, vq_loss, indices
-

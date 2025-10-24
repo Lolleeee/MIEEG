@@ -1,5 +1,6 @@
 
 from copy import copy
+import sys
 from packages.models.autoencoder import basicConv3DAE
 from packages.plotting.reconstruction_plots import plot_reconstruction_distribution
 from packages.train.training import train_model
@@ -13,18 +14,32 @@ from packages.data_objects.dataset import TorchDataset, CustomTestDataset
 from dotenv import load_dotenv
 # model = Conv3DAE(in_channels=25, embedding_dim=128, hidden_dims=[64, 128, 256], use_convnext=False)
 
-from packages.models.vqae import VQVAE, SequenceProcessor
+from packages.models.vqae import SequenceProcessor, VQVAE
+from packages.models.vqae_skip import SkipConnectionScheduler
+from packages.models.vqae_skip import VQVAE as VQVAESkip
 from packages.train.loss import VQVAELoss, SequenceVQVAELoss
 
-model = SequenceProcessor(chunk_shape=(25, 7, 5, 64), embedding_dim=64, codebook_size=512, use_quantizer=True)
-model.chunk_ae = VQVAE(
-    in_channels = 25,
+model = SequenceProcessor(chunk_shape=(25, 7, 5, 64), embedding_dim=64, codebook_size=512, use_quantizer=False)
+model.chunk_ae = VQVAESkip(
+    in_channels=25,
     input_spatial=(7, 5, 64),
     embedding_dim=64,
     codebook_size=512,
-    use_skip_connections=False,
-    num_downsample_stages=3)
+    num_downsample_stages=3,
+    use_quantizer=False,
+    use_skip_connections=True,
+    skip_strength=1
+)
 
+model.chunk_ae = VQVAE(
+    in_channels=25,
+    input_spatial=(7, 5, 64),
+    embedding_dim=64,
+    codebook_size=512,
+    num_downsample_stages=3,
+    use_quantizer=False,
+    use_skip_connections=True,
+)
 
 
 load_dotenv()
@@ -37,21 +52,22 @@ criterion = SequenceVQVAELoss(
 mae = torch.nn.L1Loss
 
 config = {
-    'lr': 1e-5,
+    #'weight_decay': 1e-4,
     'epochs': 100,
-    # 'EarlyStopping' : {'patience': 10000, 'min_delta': 0.0},
-    # 'BackupManager': {'backup_interval': 100000, 'backup_path': './model_backups'},
-    # 'ReduceLROnPlateau': {'patience': 25, 'factor': 0.5},
+    #'EarlyStopping' : {'patience': 20, 'min_delta': 0.01},
+    #'BackupManager': {'backup_interval': 10, 'backup_path': './model_backups'},
+    #'ReduceLROnPlateau': {'mode': 'min', 'patience': 5, 'factor': 0.0},
     'history_plot': {'plot_type': 'extended', 'save_path': './training_history'},
     'grad_clip': 1.0,
     'use_amp': False,
-    'grad_logging_interval': None   
+    'grad_logging_interval' : None,
+    'asym_lr': None
 }
 
 metrics = {}
     
 # dataset = CustomTestDataset(root_folder=dataset_path, nsamples=10)
-dataset = TorchDataset("/home/lolly/Projects/MIEEG/test/test_output/TEST_SAMPLE_FOLDER", chunk_size=64)
+dataset = TorchDataset("test/test_output/TEST_SAMPLE_FOLDER", chunk_size=64)
 
 
 # train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.5, 'val': 0.5}, norm_axes=(0, 1, 5), batch_size=1, norm_params=(29, 69))
@@ -61,10 +77,11 @@ print("\nStarting dummy training loop...")
 
 from packages.train.testing import autoencoder_test_plots
 
-#model = train_model(model, train_loader=train_loader, val_loader=val_loader, loss_criterion=criterion, optimizer=optimizer, config=config, metrics=metrics)
+# model = train_model(model, train_loader=train_loader, val_loader=val_loader, loss_criterion=criterion, optimizer=optimizer, config=config, metrics=metrics)
+# sys.exit(0)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 x = next(iter(train_loader)).to(device)
-x = x[0, 0, ...].unsqueeze(0).unsqueeze(0)
+x = x[0, ...].unsqueeze(0) 
 print(f"x shape: {x.shape}")
 # normalize x to [0,1] using min/max computed over dims 2,3,4 (per-sample, per-channel)
 #eps = 1e-8
@@ -73,16 +90,44 @@ print(f"x shape: {x.shape}")
 #x = (x - min_vals) / (max_vals - min_vals + eps)
 
 #criterion = torch.nn.MSELoss()
+losses = []
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-for i in range(1000):
+for i in range(500):
     out = model(x)
     #out = out[0]
     loss = criterion(out, x)
     optimizer.zero_grad()
     loss.backward()
-    optimizer.step()
     if i % 50 == 0:
         print(i, loss.item())
+            # print per-parameter and total grad norms
+        """
+        _total_sq = 0.0
+        for _name, _param in model.named_parameters():
+            if _param.grad is None:
+                _g = 0.0
+            else:
+                _g = _param.grad.detach().float().norm(2).item()
+                _total_sq += _g * _g
+            print(f"{_name}: grad_norm={_g:.6f}")
+        _total_norm = _total_sq ** 0.5
+        print(f"total_grad_norm: {_total_norm:.6f}")
+        """
+    optimizer.step()
+
+    losses.append(loss.item())
+
+    # plot and save loss curve
+    import matplotlib.pyplot as plt
+    plt.figure()
+    plt.plot(losses, marker='.', linewidth=1, label='train_loss')
+    plt.xlabel('Iteration')
+    plt.ylabel('Loss')
+    plt.title('Training Loss')
+    plt.grid(True)
+    plt.legend()
+    plt.show()
+    
 from packages.plotting.reconstruction_plots import plot_reconstruction_slices
 import numpy as np
 
