@@ -104,6 +104,13 @@ def plot_reconstruction_scatter(
     plt.show()
 
 
+import numpy as np
+import torch
+import matplotlib.pyplot as plt
+from sklearn.metrics import mean_squared_error, r2_score
+from scipy.stats import pearsonr
+from typing import List, Union
+
 def plot_reconstruction_slices(
     original: Union[np.ndarray, torch.Tensor],
     reconstructed: Union[np.ndarray, torch.Tensor], 
@@ -112,9 +119,10 @@ def plot_reconstruction_slices(
 ) -> None:
     """
     Plots slices of the original and reconstructed 4D signals for visual comparison.
-    Concats the second and third dimensions which correspond to EEG channels.
-    Selects 3 indexes in the middle of the frequency (first) dimension like [11, 12, 13].
-    Then for n_channels random channels the reconstruction vs the original is plotted.
+    Concats the second and third dimensions (EEG channels).
+    Selects 3 middle frequencies, unless provided.
+    For n_channels random channels, plots original vs reconstructed signals.
+    Displays RMSE, R², and Pearson correlation for each subplot.
     
     Args:
         original: 4D array (freq, channels, channels, time)
@@ -122,7 +130,6 @@ def plot_reconstruction_slices(
         freqs: List of 3 frequency indices to plot. If None, uses middle frequencies.
         n_channels: Number of random channels to plot (default: 4)
     """
-    import matplotlib.pyplot as plt
     
     if isinstance(original, torch.Tensor):
         original = original.cpu().detach().numpy()
@@ -131,7 +138,7 @@ def plot_reconstruction_slices(
     
     assert original.shape == reconstructed.shape, "Original and reconstructed shapes must match."
     
-    # Handle batch dimension or extra dimensions
+    # Handle batch or extra dimensions
     if len(original.shape) > 4:
         original = original.squeeze()
         reconstructed = reconstructed.squeeze()
@@ -153,59 +160,137 @@ def plot_reconstruction_slices(
         mid_freq = freq_dim // 2
         freq_indices = [mid_freq - 1, mid_freq, mid_freq + 1]
     
-    # Reshape to combine channel dimensions
+    # Flatten channel grid
     combined_original = original.reshape(freq_dim, ch1_dim * ch2_dim, time_dim)
     combined_reconstructed = reconstructed.reshape(freq_dim, ch1_dim * ch2_dim, time_dim)
     
-    # Select random channels
+    # Randomly choose channels
     total_channels = ch1_dim * ch2_dim
-    n_channels = min(n_channels, total_channels)  # Don't exceed available channels
+    n_channels = min(n_channels, total_channels)
     random_channels = np.random.choice(total_channels, size=n_channels, replace=False)
     
-    # Calculate grid dimensions
-    # Each channel gets 3 plots (one per frequency), arranged horizontally
+    # Layout
     n_cols = 3
     n_rows = n_channels
-    
-    # Dynamic figure height based on number of channels
     fig_height = max(3 * n_rows, 10)
     fig_width = 15
-    
     plt.figure(figsize=(fig_width, fig_height))
     
+    # Iterate channels × freqs
     for i, ch in enumerate(random_channels):
-        # Plot frequency 1
-        plt.subplot(n_rows, n_cols, i * n_cols + 1)
-        plt.plot(combined_original[freq_indices[0], ch, :], label="Original", color="blue")
-        plt.plot(combined_reconstructed[freq_indices[0], ch, :], label="Reconstructed", color="orange", alpha=0.7)
-        plt.title(f"Channel {ch} - Freq {freq_indices[0]}")
-        plt.xlabel("Time")
-        plt.ylabel("Amplitude")
-        if i == 0:
-            plt.legend()
-        plt.grid(True)
-        
-        # Plot frequency 2
-        plt.subplot(n_rows, n_cols, i * n_cols + 2)
-        plt.plot(combined_original[freq_indices[1], ch, :], label="Original", color="blue")
-        plt.plot(combined_reconstructed[freq_indices[1], ch, :], label="Reconstructed", color="orange", alpha=0.7)
-        plt.title(f"Channel {ch} - Freq {freq_indices[1]}")
-        plt.xlabel("Time")
-        plt.ylabel("Amplitude")
-        if i == 0:
-            plt.legend()
-        plt.grid(True)
-        
-        # Plot frequency 3
-        plt.subplot(n_rows, n_cols, i * n_cols + 3)
-        plt.plot(combined_original[freq_indices[2], ch, :], label="Original", color="blue")
-        plt.plot(combined_reconstructed[freq_indices[2], ch, :], label="Reconstructed", color="orange", alpha=0.7)
-        plt.title(f"Channel {ch} - Freq {freq_indices[2]}")
-        plt.xlabel("Time")
-        plt.ylabel("Amplitude")
-        if i == 0:
-            plt.legend()
-        plt.grid(True)
+        for j, freq in enumerate(freq_indices):
+            idx = i * n_cols + j + 1
+            
+            y_true = combined_original[freq, ch, :]
+            y_pred = combined_reconstructed[freq, ch, :]
+            
+            # Compute metrics
+            rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+            r2 = r2_score(y_true, y_pred)
+            corr, _ = pearsonr(y_true, y_pred)
+            
+            plt.subplot(n_rows, n_cols, idx)
+            plt.plot(y_true, label="Original", color="blue")
+            plt.plot(y_pred, label="Reconstructed", color="orange", alpha=0.7)
+            plt.title(
+                f"Ch {ch} - Freq {freq}\n"
+                f"RMSE={rmse:.3f} | R²={r2:.3f} | r={corr:.3f}",
+                fontsize=10
+            )
+            plt.xlabel("Time")
+            plt.ylabel("Amplitude")
+            if i == 0 and j == 0:
+                plt.legend()
+            plt.grid(True)
     
     plt.tight_layout()
     plt.show()
+
+
+import numpy as np
+import torch
+import matplotlib.pyplot as plt
+from sklearn.metrics import mean_squared_error, r2_score
+from scipy.stats import pearsonr
+
+def plot_reconstruction_performance(
+    original: np.ndarray | torch.Tensor,
+    reconstructed: np.ndarray | torch.Tensor,
+    metric: str = "rmse"
+):
+    """
+    Plots how reconstruction performance changes across frequencies and channels.
+    Computes RMSE, R², and Pearson correlation for every freq × channel pair.
+
+    Args:
+        original: 4D array (freq, chan_row, chan_col, time)
+        reconstructed: same shape as original
+        metric: which metric to display ('rmse', 'r2', 'corr')
+    """
+    
+    # --- Handle tensors ---
+    if isinstance(original, torch.Tensor):
+        original = original.detach().cpu().numpy()
+    if isinstance(reconstructed, torch.Tensor):
+        reconstructed = reconstructed.detach().cpu().numpy()
+
+    assert original.shape == reconstructed.shape, "Original and reconstructed must match in shape."
+    
+    # Squeeze batch dimension if present
+    if len(original.shape) > 4:
+        original = original.squeeze()
+        reconstructed = reconstructed.squeeze()
+        
+    if len(original.shape) > 4 or len(original.shape) < 4:
+        original = original[0, ...] if len(original.shape) > 4 else original
+        reconstructed = reconstructed[0, ...] if len(reconstructed.shape) > 4 else reconstructed
+    
+    assert original.ndim == 4, "Expected shape (freq, chan_row, chan_col, time)"
+    
+    freq_dim, ch1_dim, ch2_dim, _ = original.shape
+    n_channels = ch1_dim * ch2_dim
+    
+    # Flatten channels for iteration
+    orig_flat = original.reshape(freq_dim, n_channels, -1)
+    recon_flat = reconstructed.reshape(freq_dim, n_channels, -1)
+    
+    # Initialize metric matrices
+    rmse_map = np.zeros((freq_dim, n_channels))
+    r2_map = np.zeros((freq_dim, n_channels))
+    corr_map = np.zeros((freq_dim, n_channels))
+    
+    # Compute metrics
+    for f in range(freq_dim):
+        for c in range(n_channels):
+            y_true = orig_flat[f, c]
+            y_pred = recon_flat[f, c]
+            
+            rmse_map[f, c] = np.sqrt(mean_squared_error(y_true, y_pred))
+            r2_map[f, c] = r2_score(y_true, y_pred)
+            corr_map[f, c], _ = pearsonr(y_true, y_pred)
+    
+    # Choose which metric to plot
+    metric = metric.lower()
+    if metric == "rmse":
+        data = rmse_map
+        title = "RMSE (lower is better)"
+    elif metric == "r2":
+        data = r2_map
+        title = "R² (higher is better)"
+    elif metric == "corr":
+        data = corr_map
+        title = "Pearson r (higher is better)"
+    else:
+        raise ValueError("metric must be one of: 'rmse', 'r2', 'corr'")
+    
+    # Plot
+    plt.figure(figsize=(12, 6))
+    im = plt.imshow(data, aspect="auto", cmap="viridis", origin="lower")
+    plt.colorbar(im, label=title.split(" ")[0])
+    plt.title(title)
+    plt.xlabel("Channel index (flattened)")
+    plt.ylabel("Frequency index")
+    plt.tight_layout()
+    plt.show()
+    
+    return {"rmse": rmse_map, "r2": r2_map, "corr": corr_map}

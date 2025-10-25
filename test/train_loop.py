@@ -19,26 +19,16 @@ from packages.models.vqae_skip import SkipConnectionScheduler
 from packages.models.vqae_skip import VQVAE as VQVAESkip
 from packages.train.loss import VQVAELoss, SequenceVQVAELoss
 
-model = SequenceProcessor(chunk_shape=(25, 7, 5, 64), embedding_dim=64, codebook_size=512, use_quantizer=False)
+model = SequenceProcessor(chunk_shape=(25, 7, 5, 64), embedding_dim=32, codebook_size=512, use_quantizer=False)
 model.chunk_ae = VQVAESkip(
     in_channels=25,
     input_spatial=(7, 5, 64),
-    embedding_dim=64,
+    embedding_dim=32,
     codebook_size=512,
     num_downsample_stages=3,
     use_quantizer=False,
     use_skip_connections=True,
-    skip_strength=1
-)
-
-model.chunk_ae = VQVAE(
-    in_channels=25,
-    input_spatial=(7, 5, 64),
-    embedding_dim=64,
-    codebook_size=512,
-    num_downsample_stages=3,
-    use_quantizer=False,
-    use_skip_connections=True,
+    skip_strength=0.1
 )
 
 
@@ -77,8 +67,8 @@ print("\nStarting dummy training loop...")
 
 from packages.train.testing import autoencoder_test_plots
 
-model = train_model(model, train_loader=train_loader, val_loader=val_loader, loss_criterion=criterion, optimizer=optimizer, config=config, metrics=metrics)
-sys.exit(0)
+# train_model(model, train_loader=train_loader, val_loader=val_loader, loss_criterion=criterion, optimizer=optimizer, config=config, metrics=metrics)
+# sys.exit(0)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 x = next(iter(train_loader)).to(device)
 x = x[0, ...].unsqueeze(0) 
@@ -110,7 +100,7 @@ plt.grid(True)
 plt.legend()
 plt.show()
     
-from packages.plotting.reconstruction_plots import plot_reconstruction_slices
+from packages.plotting.reconstruction_plots import plot_reconstruction_slices, plot_reconstruction_performance
 out = model(x)
 
 rec = out[0]
@@ -118,5 +108,5 @@ rec = rec.detach().cpu().numpy()
 orig = x.detach().cpu().numpy()
 
 plot_reconstruction_slices(orig, rec, n_channels=6)
-
+plot_reconstruction_performance(orig, rec)
 #autoencoder_test_plots(model, val_loader, nsamples=5)
