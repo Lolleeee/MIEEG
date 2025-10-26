@@ -245,7 +245,9 @@ class VQVAE(nn.Module):
         use_skip_connections=False,
         skip_strength=1.0,  # Global skip strength (0.0 to 1.0)
         skip_strengths=None,  # Per-layer skip strengths (list of floats)
-        skip_mode='concat'  # 'concat', 'add', or 'weighted_add'
+        skip_mode='concat',  # 'concat', 'add', or 'weighted_add'
+        commitment_cost=0.25, 
+        decay=0.99
     ):
         super().__init__()
         
@@ -256,7 +258,8 @@ class VQVAE(nn.Module):
         self.use_quantizer = use_quantizer
         self.use_skip_connections = use_skip_connections
         self.skip_mode = skip_mode
-        
+        self.commitment_cost = commitment_cost
+        self.decay = decay
         # Global skip strength
         self.register_buffer('skip_strength', torch.tensor(skip_strength))
         
@@ -294,7 +297,9 @@ class VQVAE(nn.Module):
         
         self.vq = VectorQuantizer(
             num_embeddings=codebook_size,
-            embedding_dim=embedding_dim
+            embedding_dim=embedding_dim,
+            commitment_cost=self.commitment_cost,
+            decay=self.decay
         )
         
         self.from_embedding = nn.Sequential(
