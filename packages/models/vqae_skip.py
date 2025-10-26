@@ -20,6 +20,17 @@ class VectorQuantizer(nn.Module):
         self.register_buffer("ema_w", torch.randn(num_embeddings, embedding_dim))
 
     def forward(self, z):
+
+        if self.training and torch.rand(1).item() < 0.01:  # 1% chance per batch
+            with torch.no_grad():
+                dead_mask = self.ema_cluster_size < 0.1
+                if dead_mask.any():
+                    # Sample from current batch
+                    n_dead = dead_mask.sum()
+                    alive_indices = (~dead_mask).nonzero().squeeze()
+                    # Copy from alive codes + noise
+                    self.embedding.data[dead_mask] = self.embedding.data[alive_indices[torch.randint(len(alive_indices), (n_dead,))]] + 0.01 * torch.randn_like(self.embedding.data[dead_mask])
+                self.ema_cluster_size[dead_mask] = self.ema_cluster_size[alive_indices].mean()
         flat_z = z.view(-1, self.embedding_dim)
         distances = (
             torch.sum(flat_z ** 2, dim=1, keepdim=True)
@@ -486,9 +497,11 @@ class VQVAE(nn.Module):
             self.final_channels = z.shape[1]
         
         z = self.to_embedding(z)
-
+        print(self.use_quantizer)
         if self.use_quantizer:
+            z = F.normalize(z, p=2, dim=1)
             z_q, vq_loss, indices = self.vq(z)
+
         else:
             z_q, vq_loss, indices = z, torch.tensor(0., device=z.device), None
         

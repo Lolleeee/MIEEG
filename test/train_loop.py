@@ -19,14 +19,14 @@ from packages.models.vqae_skip import SkipConnectionScheduler
 from packages.models.vqae_skip import VQVAE as VQVAESkip
 from packages.train.loss import VQVAELoss, SequenceVQVAELoss
 
-model = SequenceProcessor(chunk_shape=(25, 7, 5, 64), embedding_dim=32, codebook_size=512, use_quantizer=False)
+model = SequenceProcessor(chunk_shape=(25, 7, 5, 64), embedding_dim=32, codebook_size=512, use_quantizer=True)
 model.chunk_ae = VQVAESkip(
     in_channels=25,
     input_spatial=(7, 5, 64),
     embedding_dim=32,
     codebook_size=512,
     num_downsample_stages=3,
-    use_quantizer=False,
+    use_quantizer=True,
     use_skip_connections=True,
     skip_strength=0.1
 )
