@@ -20,17 +20,6 @@ class VectorQuantizer(nn.Module):
         self.register_buffer("ema_w", torch.randn(num_embeddings, embedding_dim))
 
     def forward(self, z):
-
-        if self.training and torch.rand(1).item() < 0.01:  # 1% chance per batch
-            with torch.no_grad():
-                dead_mask = self.ema_cluster_size < 0.1
-                if dead_mask.any():
-                    # Sample from current batch
-                    n_dead = dead_mask.sum()
-                    alive_indices = (~dead_mask).nonzero().squeeze()
-                    # Copy from alive codes + noise
-                    self.embedding.data[dead_mask] = self.embedding.data[alive_indices[torch.randint(len(alive_indices), (n_dead,))]] + 0.01 * torch.randn_like(self.embedding.data[dead_mask])
-                self.ema_cluster_size[dead_mask] = self.ema_cluster_size[alive_indices].mean()
         flat_z = z.view(-1, self.embedding_dim)
         distances = (
             torch.sum(flat_z ** 2, dim=1, keepdim=True)
@@ -44,6 +33,7 @@ class VectorQuantizer(nn.Module):
         if self.training:
             self.ema_cluster_size = self.ema_cluster_size * self.decay + \
                                     (1 - self.decay) * torch.sum(encodings, dim=0)
+            
             dw = torch.matmul(encodings.t(), flat_z)
             self.ema_w = self.ema_w * self.decay + (1 - self.decay) * dw
             n = torch.sum(self.ema_cluster_size)
@@ -53,6 +43,25 @@ class VectorQuantizer(nn.Module):
                 * n
             )
             self.embedding.data = self.ema_w / cluster_size.unsqueeze(1)
+
+            # Replace the dead code reset block in VectorQuantizer.forward with this:
+            if self.training and torch.rand(1).item() < 0.01:  # 1% chance per batch
+                with torch.no_grad():
+                    dead_mask = self.ema_cluster_size < 0.1
+                    if dead_mask.any():
+                        n_dead = dead_mask.sum().item()
+                        alive_indices = (~dead_mask).nonzero(as_tuple=True)[0]  # Use as_tuple=True to get 1D tensor
+                        
+                        # Handle edge case: if only 1 alive code, duplicate it
+                        if alive_indices.numel() == 1:
+                            self.embedding.data[dead_mask] = self.embedding.data[alive_indices[0]].unsqueeze(0).expand(n_dead, -1) + 0.01 * torch.randn(n_dead, self.embedding_dim, device=self.embedding.device)
+                        else:
+                            # Sample from alive codes
+                            sampled_indices = alive_indices[torch.randint(0, len(alive_indices), (n_dead,), device=alive_indices.device)]
+                            self.embedding.data[dead_mask] = self.embedding.data[sampled_indices] + 0.01 * torch.randn(n_dead, self.embedding_dim, device=self.embedding.device)
+                        
+                        self.ema_cluster_size[dead_mask] = self.ema_cluster_size[alive_indices].mean()
+
 
         loss = self.commitment_cost * torch.mean((z_q.detach() - flat_z) ** 2)
         z_q = flat_z + (z_q - flat_z).detach()
@@ -497,7 +506,6 @@ class VQVAE(nn.Module):
             self.final_channels = z.shape[1]
         
         z = self.to_embedding(z)
-        print(self.use_quantizer)
         if self.use_quantizer:
             z = F.normalize(z, p=2, dim=1)
             z_q, vq_loss, indices = self.vq(z)
