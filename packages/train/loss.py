@@ -146,39 +146,37 @@ class CustomL1Loss(nn.Module):
         return loss * self.scale
     
 
-class SequenceVQVAELoss(nn.Module):
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+class SequenceVQVAELossPlus(nn.Module):
     """
-    Loss function for SequenceProcessor.
-    Handles sequences of chunks.
-    
-    Usage:
-        criterion = SequenceVQVAELoss(recon_loss_type='mse')
-        
-        # During training:
-        chunks = ...  # (B, num_chunks, 25, 7, 5, 32)
-        reconstruction, vq_loss, indices = seq_processor(chunks)
-        loss = criterion(chunks, reconstruction, vq_loss)
+    Loss function for SequenceProcessor with bottleneck regularization.
     """
     def __init__(
         self,
         recon_loss_type='mse',
         recon_weight=1.0,
-        perceptual_weight=0.1
+        perceptual_weight=0.1,
+        bottleneck_var_weight=1.0,      # NEW: Force variance in embeddings
+        bottleneck_cov_weight=0.5,      # NEW: Force decorrelation
+        min_variance=0.1                # NEW: Minimum per-dimension variance
     ):
         super().__init__()
         
         self.recon_loss_type = recon_loss_type
         self.recon_weight = recon_weight
         self.perceptual_weight = perceptual_weight
+        self.bottleneck_var_weight = bottleneck_var_weight
+        self.bottleneck_cov_weight = bottleneck_cov_weight
+        self.min_variance = min_variance
     
     def _perceptual_loss(self, x, x_recon):
         """Perceptual loss for sequence of chunks"""
-        # Flatten sequence dimension for processing
         batch_size, num_chunks = x.shape[:2]
         x_flat = x.view(-1, *x.shape[2:])
         x_recon_flat = x_recon.view(-1, *x_recon.shape[2:])
         
-        # Compute gradients
         def compute_gradients(tensor):
             dx = tensor[:, :, 1:, :, :] - tensor[:, :, :-1, :, :]
             dy = tensor[:, :, :, 1:, :] - tensor[:, :, :, :-1, :]
@@ -191,19 +189,61 @@ class SequenceVQVAELoss(nn.Module):
         loss = sum(F.l1_loss(g1, g2) for g1, g2 in zip(x_grads, recon_grads))
         return loss / 3.0
 
-    def forward(self, outputs, chunks):
+    def _bottleneck_variance_loss(self, embeddings):
+        """
+        Penalize low variance in embeddings to prevent collapse.
+        
+        Args:
+            embeddings: (B * num_chunks, embedding_dim) flattened embeddings
+        """
+        # Compute per-dimension variance
+        z_mean = embeddings.mean(dim=0)
+        z_var = ((embeddings - z_mean) ** 2).mean(dim=0)
+        
+        # Penalize variance below threshold
+        var_loss = torch.mean(torch.relu(self.min_variance - z_var))
+        
+        return var_loss
+    
+    def _bottleneck_decorrelation_loss(self, embeddings):
+        """
+        Penalize correlation between embedding dimensions.
+        Forces dimensions to be independent.
+        
+        Args:
+            embeddings: (B * num_chunks, embedding_dim) flattened embeddings
+        """
+        # Center the embeddings
+        z_mean = embeddings.mean(dim=0)
+        z_centered = embeddings - z_mean
+        
+        # Compute correlation matrix
+        z_std = z_centered.std(dim=0, keepdim=True) + 1e-8
+        z_normalized = z_centered / z_std
+        
+        correlation = torch.mm(z_normalized.t(), z_normalized) / embeddings.size(0)
+        
+        # Penalize off-diagonal correlations
+        identity = torch.eye(embeddings.size(1), device=embeddings.device)
+        decorr_loss = torch.mean((correlation - identity) ** 2)
+        
+        return decorr_loss
+
+    def forward(self, outputs, chunks, embeddings=None):
         """
         Compute total loss for sequence.
         
         Args:
-            chunks: Original chunks (B, num_chunks, 25, 7, 5, 32)
-            chunks_recon: Reconstructed chunks (B, num_chunks, 25, 7, 5, 32)
-            vq_loss: VQ commitment loss from model
+            outputs: (chunks_recon, vq_loss, indices) from model
+            chunks: Original chunks (B, num_chunks, C, H, W, T)
+            embeddings: (B, num_chunks, embedding_dim) - REQUIRED for bottleneck reg
             
         Returns:
             loss: Total loss (scalar)
+            loss_dict: Dictionary of individual loss components
         """
-        chunks_recon, vq_loss, _= outputs
+        chunks_recon, vq_loss, _ = outputs
+        
         # Reconstruction loss
         if self.recon_loss_type == 'mse':
             recon_loss = F.mse_loss(chunks_recon, chunks)
@@ -216,8 +256,37 @@ class SequenceVQVAELoss(nn.Module):
         else:
             raise ValueError(f"Unknown recon_loss_type: {self.recon_loss_type}")
         
+        # Bottleneck regularization (if embeddings provided)
+        bottleneck_loss = 0.0
+        if embeddings is not None:
+            # Flatten embeddings: (B, num_chunks, D) -> (B*num_chunks, D)
+            embeddings_flat = embeddings.view(-1, embeddings.size(-1))
+            
+            # Variance loss: prevent dimensions from collapsing to zero
+            var_loss = self._bottleneck_variance_loss(embeddings_flat)
+            
+            # Decorrelation loss: prevent dimensions from being correlated
+            decorr_loss = self._bottleneck_decorrelation_loss(embeddings_flat)
+            
+            bottleneck_loss = (
+                self.bottleneck_var_weight * var_loss +
+                self.bottleneck_cov_weight * decorr_loss
+            )
+        
         # Total loss
-        total_loss = self.recon_weight * recon_loss + vq_loss
+        total_loss = (
+            self.recon_weight * recon_loss + 
+            vq_loss + 
+            bottleneck_loss
+        )
+        
+        # Return detailed loss breakdown for monitoring
+        loss_dict = {
+            'total': total_loss.item(),
+            'recon': recon_loss.item(),
+            'vq': vq_loss.item() if isinstance(vq_loss, torch.Tensor) else vq_loss,
+            'bottleneck': bottleneck_loss.item() if isinstance(bottleneck_loss, torch.Tensor) else 0.0
+        }
         
         return total_loss
     

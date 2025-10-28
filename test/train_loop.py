@@ -19,16 +19,18 @@ from packages.models.vqae_skip import SkipConnectionScheduler
 from packages.models.vqae_skip import VQVAE as VQVAESkip
 from packages.train.loss import VQVAELoss, SequenceVQVAELoss
 
-model = SequenceProcessor(chunk_shape=(25, 7, 5, 64), embedding_dim=32, codebook_size=512, use_quantizer=True)
+model = SequenceProcessor(chunk_shape=(25, 7, 5, 32), embedding_dim=64, codebook_size=1024, use_quantizer=False)
 model.chunk_ae = VQVAESkip(
     in_channels=25,
-    input_spatial=(7, 5, 64),
-    embedding_dim=32,
+    input_spatial=(7, 5, 32),
+    embedding_dim=64,
     codebook_size=512,
     num_downsample_stages=3,
-    use_quantizer=True,
-    use_skip_connections=True,
-    skip_strength=0.1
+    use_quantizer=False,
+    use_skip_connections=False,
+    skip_strength=0.1,
+    commitment_cost=0.5,
+    decay=0.9999
 )
 
 
@@ -37,7 +39,7 @@ load_dotenv()
 optimizer = torch.optim.AdamW
 criterion = SequenceVQVAELoss(
     recon_loss_type='mse',
-    recon_weight=1.0
+    recon_weight=1
 )
 mae = torch.nn.L1Loss
 
@@ -57,39 +59,53 @@ config = {
 metrics = {}
     
 # dataset = CustomTestDataset(root_folder=dataset_path, nsamples=10)
-dataset = TorchDataset("test/test_output/TEST_SAMPLE_FOLDER", chunk_size=64)
-
+dataset = TorchDataset("test/test_output/", chunk_size=32)
 
 # train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.5, 'val': 0.5}, norm_axes=(0, 1, 5), batch_size=1, norm_params=(29, 69))
-train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.5, 'val': 0.5}, batch_size=1)
+train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.01, 'val': 0.3}, batch_size=32)
 
 print("\nStarting dummy training loop...")
-
-from packages.train.testing import autoencoder_test_plots
 
 # train_model(model, train_loader=train_loader, val_loader=val_loader, loss_criterion=criterion, optimizer=optimizer, config=config, metrics=metrics)
 # sys.exit(0)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 x = next(iter(train_loader)).to(device)
-x = x[0, ...].unsqueeze(0) 
+# x = x[0, ...].unsqueeze(0) 
 print(f"x shape: {x.shape}")
 
-losses = []
+# Correct training loop
+model.train()
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+losses = []
+print(f"Current quantizer bool: {model.chunk_ae.use_quantizer}")
 for i in range(500):
-    out = model(x)
-    #out = out[0]
-    loss = criterion(out, x)
+    if i == 250:
+        model.chunk_ae.use_quantizer = True
+        print(f"Quantizer enabled at iteration {i}, Current quantizer bool: {model.chunk_ae.use_quantizer}")
     optimizer.zero_grad()
+    
+    # Forward pass
+    out = model(x)  # Get both outputs
+    loss = criterion(out, x)
+    
+    # Backward pass
     loss.backward()
-    if i % 50 == 0:
-        print(i, loss.item())
-
+    
+    # Clip gradients
+    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+    
+    # Update
     optimizer.step()
-
+    
+    if i % 50 == 0:
+        print(f"{i}: loss={loss.item():.4f}, grad_norm={grad_norm:.4f}")
+        usage = model.chunk_ae.vq.get_codebook_usage()
+        print(f"Active codes: {usage['active_codes']}/{usage['total_codes']}")
+        print(f"Warmup complete: {usage['warmup_complete']}")
     losses.append(loss.item())
 
-    # plot and save loss curve
+        
+
 import matplotlib.pyplot as plt
 plt.figure()
 plt.plot(losses, marker='.', linewidth=1, label='train_loss')

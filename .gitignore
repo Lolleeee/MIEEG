@@ -5,3 +5,5 @@
 model_backups/
 __pycache__/
 *.pyc
+kaggle.json
+test_output/
