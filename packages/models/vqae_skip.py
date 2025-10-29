@@ -366,7 +366,7 @@ class VQVAE(nn.Module):
         self.to_embedding = nn.Sequential(
             nn.Flatten(),
             nn.Linear(self.flat_size, embedding_dim * 2),
-            nn.BatchNorm1d(embedding_dim * 2),
+            nn.LayerNorm(embedding_dim * 2),
             nn.GELU(),
             nn.Dropout(0.1),
             nn.Linear(embedding_dim * 2, embedding_dim)
@@ -378,7 +378,7 @@ class VQVAE(nn.Module):
             commitment_cost=self.commitment_cost,
             decay=self.decay
         )
-        
+
         self.from_embedding = nn.Sequential(
             nn.Linear(embedding_dim, embedding_dim * 2),
             nn.LayerNorm(embedding_dim * 2),
@@ -478,8 +478,7 @@ class VQVAE(nn.Module):
             out_ch = stage['in_channels'] if stage['in_channels'] is not None else out_channels
             if i == len(decoder_config) - 1:
                 out_ch = out_channels
-            
-            # ✅ NEW: Get skip's expected channels (from corresponding encoder stage)
+
             skip_idx = len(decoder_config) - 1 - i
             if 0 <= skip_idx < len(encoder_config):
                 skip_ch = encoder_config[skip_idx]['out_channels']
@@ -605,7 +604,6 @@ class VQVAE(nn.Module):
         
         if hasattr(self, '_encoder_features'):
             del self._encoder_features
-        
         return x_recon, vq_loss, indices
 
 

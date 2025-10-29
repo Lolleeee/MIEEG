@@ -15,8 +15,16 @@ model.chunk_ae = VQVAESkip(
     use_quantizer=False,
     use_skip_connections=False,
     num_downsample_stages=3)
+model_dict = torch.load('model_backups/best_model_epoch_10.pt', map_location='cpu')
+sd = model.state_dict()
+num_features = sd["chunk_ae.to_embedding.2.running_mean"].numel()
+sd["chunk_ae.to_embedding.2.running_mean"] = torch.zeros(num_features)
+sd["chunk_ae.to_embedding.2.running_var"] = torch.ones(num_features)
+sd["chunk_ae.vq._initialized"] = torch.tensor(False)
+sd["chunk_ae.vq._step_counter"] = torch.tensor(0)
 
-model.load_state_dict(torch.load('model_backups/vqae_skip_chunk16_64emb.pt', map_location='cpu'), strict=False)
+model.load_state_dict(sd, strict=True)
+
 model.eval()
 
 dataset = TorchDataset("test/test_output/", chunk_size=16)
@@ -24,7 +32,7 @@ dataset = TorchDataset("test/test_output/", chunk_size=16)
 train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.01, 'val': 0.3}, batch_size=32)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-x = next(iter(train_loader)).to(device)
+x = next(iter(val_loader)).to(device)
 out = model(x)
 loss = torch.nn.MSELoss()(out[0], x)
 print(f"Reconstruction loss: {loss.item()}")

@@ -528,5 +528,5 @@ class SequenceProcessor(nn.Module):
         """
         embeddings, vq_loss, indices = self.encode_sequence(chunks)
         chunks_recon = self.decode_sequence(embeddings)
-        return chunks_recon, vq_loss, indices
+        return chunks_recon, vq_loss, indices, embeddings
 

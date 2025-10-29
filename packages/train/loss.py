@@ -144,12 +144,9 @@ class CustomL1Loss(nn.Module):
             sys.exit(0)
 
         return loss * self.scale
-    
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-class SequenceVQVAELossPlus(nn.Module):
+
+class SequenceVQVAELoss(nn.Module):
     """
     Loss function for SequenceProcessor with bottleneck regularization.
     """
@@ -170,10 +167,10 @@ class SequenceVQVAELossPlus(nn.Module):
         self.bottleneck_var_weight = bottleneck_var_weight
         self.bottleneck_cov_weight = bottleneck_cov_weight
         self.min_variance = min_variance
-    
+        self.last_losses = None
+
     def _perceptual_loss(self, x, x_recon):
         """Perceptual loss for sequence of chunks"""
-        batch_size, num_chunks = x.shape[:2]
         x_flat = x.view(-1, *x.shape[2:])
         x_recon_flat = x_recon.view(-1, *x_recon.shape[2:])
         
@@ -229,7 +226,7 @@ class SequenceVQVAELossPlus(nn.Module):
         
         return decorr_loss
 
-    def forward(self, outputs, chunks, embeddings=None):
+    def forward(self, outputs, chunks):
         """
         Compute total loss for sequence.
         
@@ -242,7 +239,7 @@ class SequenceVQVAELossPlus(nn.Module):
             loss: Total loss (scalar)
             loss_dict: Dictionary of individual loss components
         """
-        chunks_recon, vq_loss, _ = outputs
+        chunks_recon, vq_loss, _, embeddings = outputs
         
         # Reconstruction loss
         if self.recon_loss_type == 'mse':
@@ -281,11 +278,13 @@ class SequenceVQVAELossPlus(nn.Module):
         )
         
         # Return detailed loss breakdown for monitoring
-        loss_dict = {
+        self.last_losses = {
             'total': total_loss.item(),
             'recon': recon_loss.item(),
             'vq': vq_loss.item() if isinstance(vq_loss, torch.Tensor) else vq_loss,
-            'bottleneck': bottleneck_loss.item() if isinstance(bottleneck_loss, torch.Tensor) else 0.0
+            'bottleneck': bottleneck_loss.item() if isinstance(bottleneck_loss, torch.Tensor) else 0        ,
+            'bottleneck_var': var_loss.item() if embeddings is not None else 0,
+            'bottleneck_cov': decorr_loss.item() if embeddings is not None else 0
         }
         
         return total_loss
