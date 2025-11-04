@@ -32,7 +32,7 @@ FILE_LOADING_FUNCTIONS = {
     ".pt": torch.load,
 }
 
-def _filetype_loader(file_path):
+def _filetype_loader(file_path: str) -> Any:
     _, ext = os.path.splitext(file_path)
     if ext in FILE_LOADING_FUNCTIONS:
         file = FILE_LOADING_FUNCTIONS[ext](file_path)
@@ -58,6 +58,8 @@ class BasicDataset():
 
         if root_folder is not None and os.path.isdir(root_folder):
             self._get_item_list()
+            if len(self.item_list) == 0:
+                raise ValueError(f"No files found in directory: {root_folder}")
 
     def __len__(self):
         return len(self.item_list)
@@ -76,8 +78,6 @@ class BasicDataset():
         except Exception as e:
             raise TypeError(f"Error loading {item_path}: {e}")
 
-         
-
     # Recursively gather all file paths inside root_folder
     def _get_item_list(self, base_folder: str = None):
         if base_folder is None:
@@ -91,10 +91,10 @@ class BasicDataset():
                 self.item_list.append(item_path)
 
 
-class FileLoader(BasicDataset):
+class FileDataset(BasicDataset):
     def __init__(
         self,
-        root_folder,
+        root_folder : str,
         unpack_func: Callable[[Any], Any] = None,
         yield_identifiers: bool = False,
     ):
@@ -201,42 +201,53 @@ class TorchDataset(Dataset, BasicDataset):
         data = reshaped.permute(k - 1, *range(0, k - 1), k)
         return data
 
-class CustomTestDataset(Dataset, BasicDataset):
+class TestTorchDataset(TorchDataset):
+    __test__ = False  # prevent pytest from collecting this class as a test case
     def __init__(
         self,
         root_folder: str = None,
         unpack_func: Union[Callable[[Any], Any], str] = general_unpack_func,
         nsamples: int = 10,
         shape: tuple = (25, 7, 5, 250),
+        chunk_size: int = None
     ):  
-        BasicDataset.__init__(self, root_folder, unpack_func)
+        self._norm_params = None
+        self.chunk_size = chunk_size
         self.nsamples = nsamples
         self.shape = shape
-        
-        
 
-        if self.root_folder is not None and os.path.isdir(self.root_folder):
-            if len(self.item_list) < self.nsamples:
-                self.nsamples = len(self.item_list)
-                logger.warning(f"Requested {self.nsamples} samples, but only found {len(self.item_list)} files: taking {len(self.item_list)} files.")
-            self.item_list = np.random.choice(self.item_list, self.nsamples, replace=False)
-            self.use_files = True
-        else:
-            logging.warning("No root_folder or file_type provided. Using random data generation.")
-            self.use_files = False
-
-    def __len__(self):
-        return self.nsamples
+        if root_folder is not None:
+            super().__init__(root_folder, unpack_func, chunk_size)
+        else: 
+            self.item_list = self._get_random_item_list()
+        
+        if len(self.item_list) < self.nsamples:
+            self.nsamples = len(self.item_list)
+            logger.warning(f"Requested {self.nsamples} samples, but only found {len(self.item_list)} files: taking {len(self.item_list)} files.")
+        
+        torch.manual_seed(RANDOM_SEED)
+        indices = torch.randperm(len(self.item_list))[:self.nsamples]
+        self.item_list = [self.item_list[i] for i in indices]
+        print(__class__.__name__)
+        logging.info(f"Sampling {self.nsamples} items.")
+        
+    def _get_random_item_list(self):
+        torch.manual_seed(RANDOM_SEED)
+        item_list = [torch.randn(self.shape) for _ in range(self.nsamples)]
+        assert all(isinstance(item, torch.Tensor) for item in item_list)
+        return item_list
 
     def __getitem__(self, idx):
-        if self.use_files:
-            data = BasicDataset.__getitem__(self, idx)
-            if isinstance(data, np.ndarray):
-                data = torch.from_numpy(data)
+        # When item_list contains tensors (not file paths), return directly
+        if isinstance(self.item_list[idx], torch.Tensor):
+            data = self.item_list[idx]
+            
+            if self._norm_params is not None:
+                data = self._normalize_item(data)
+            
+            if self.chunk_size is not None:
+                data = self._get_chunks(data)
+            
             return data.float()
         else:
-            np.random.seed(RANDOM_SEED + idx)
-            data = np.random.randn(*self.shape).astype(np.float32)
-            return torch.from_numpy(data).float()
-
-
+            return super().__getitem__(idx)

@@ -15,7 +15,8 @@ from packages.data_objects.dataset import RANDOM_SEED, TorchDataset
 logging.basicConfig(level=logging.INFO)
 
 
-def _get_set_sizes(sets_size, dataset, indices):
+def _get_set_sizes(sets_size : Dict[str, float], dataset, indices):
+    assert all(k in ["train", "val", "test"] for k in sets_size.keys()), "sets_size keys must be at least 'train', 'val'"
     train_size = int(sets_size["train"] * len(dataset))
     val_size = int(sets_size["val"] * len(dataset))
     if "test" not in sets_size:
@@ -99,7 +100,6 @@ def _calc_norm_params(train_loader, axes, norm_params=None):
     return mean, std
 
 
-# TODO refactor loaders into a separate module
 def get_data_loaders(
     dataset: TorchDataset,
     batch_size: int = 32,
@@ -113,6 +113,7 @@ def get_data_loaders(
     and stored in dataset._norm_params based on norm_axes
     norm_axes : axes to calculate normalization across, e.g. (0, 2, 3) to normalize across batch, height and width for 4D tensors [batch, channels, height, width]
     '''
+    assert isinstance(sets_size, dict), "sets_size must be a dict with keys 'train', 'val', 'test'"
     indices = np.arange(len(dataset))
 
     np.random.seed(RANDOM_SEED)
@@ -121,7 +122,11 @@ def get_data_loaders(
     train_idx, val_idx, test_idx = _get_set_sizes(sets_size, dataset, indices)
 
     if norm_axes is not None:
+        logging.info(f"Calculating normalization parameters over axes {norm_axes}")
+
         temp_train_dataset = Subset(dataset, train_idx)
+
+        logging.info(f"Using {len(train_idx)} samples for normalization calculation")
         temp_train_loader = DataLoader(
             temp_train_dataset,
             batch_size=batch_size,
@@ -131,7 +136,7 @@ def get_data_loaders(
         mean, std = _calc_norm_params(temp_train_loader, axes=norm_axes, norm_params=norm_params)
 
         dataset._norm_params = (mean, std)
-
+        
     train_dataset = Subset(dataset, train_idx)
     val_dataset = Subset(dataset, val_idx)
     test_dataset = Subset(dataset, test_idx)
@@ -153,52 +158,5 @@ def get_data_loaders(
     )
     
     return train_loader, val_loader, test_loader
-
-# TODO This is broken, split the dataset without the sampler
-def get_cv_loaders_with_static_test(
-    dataset, batch_size=8, n_splits=5, test_size=0.2, num_workers=4
-):
-    indices = np.arange(len(dataset))
-    np.random.seed(RANDOM_SEED)
-    np.random.shuffle(indices)
-    n_test = int(test_size * len(dataset))
-    test_idx = indices[:n_test]
-    cv_idx = indices[n_test:]
-
-    test_loader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        sampler=SubsetRandomSampler(test_idx),
-        num_workers=num_workers,
-    )
-
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=RANDOM_SEED)
-    for train_idx, val_idx in kf.split(cv_idx):
-        # Map fold indices back to the original dataset indices
-        train_sampler = SubsetRandomSampler(cv_idx[train_idx])
-        val_sampler = SubsetRandomSampler(cv_idx[val_idx])
-        train_loader = DataLoader(
-            dataset,
-            batch_size=batch_size,
-            sampler=train_sampler,
-            num_workers=num_workers,
-        )
-        val_loader = DataLoader(
-            dataset, batch_size=batch_size, sampler=val_sampler, num_workers=num_workers
-        )
-        yield train_loader, val_loader, test_loader
-
-# TODO This is broken, split the dataset without the sampler
-def get_test_loader(dataset: Dataset, batch_size=8, num_workers=4):
-    indices = np.arange(len(dataset))
-    np.random.seed(RANDOM_SEED)
-    np.random.shuffle(indices)
-    test_loader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        sampler=SubsetRandomSampler(indices),
-        num_workers=num_workers,
-    )
-    return test_loader
 
 

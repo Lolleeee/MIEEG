@@ -36,13 +36,13 @@ def autoencoder_test_plots(model, loader, nsamples=5):
     plot_reconstruction_slices(single_input, single_output)
 
 if __name__ == "__main__":
-    from packages.data_objects.dataset import TorchDataset, CustomTestDataset
-    from packages.io.file_loader import get_data_loaders 
+    from packages.data_objects.dataset import TorchDataset, TestTorchDataset
+    from packages.io.torch_dataloaders import get_data_loaders 
     from packages.models.autoencoder_skip import Conv3DAE
 
     dataset_path = '/home/lolly/Projects/MIEEG/data/kaggle_eeg/preprocessed/'
 
-    dataset = CustomTestDataset(nsamples=5, shape=(25, 7, 5, 64))
+    dataset = TestTorchDataset(nsamples=5, shape=(25, 7, 5, 64))
 
     train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.7, 'val': 0.3, 'test': 0.}, norm_axes=(0, 4), batch_size = 128)
 

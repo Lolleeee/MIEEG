@@ -6,9 +6,9 @@ import torch
 import pytest
 from packages.data_objects.dataset import (
     BasicDataset,
-    FileLoader,
+    FileDataset,
     TorchDataset,
-    CustomTestDataset,
+    TestTorchDataset,
     general_unpack_func,
     _filetype_loader
 )
@@ -141,23 +141,23 @@ class TestFileLoader:
         shutil.rmtree(temp_dir)
 
     def test_init(self, temp_dataset_dir):
-        loader = FileLoader(root_folder=temp_dataset_dir, yield_identifiers=True)
+        loader = FileDataset(root_folder=temp_dataset_dir, yield_identifiers=True)
         assert loader.yield_identifiers is True
         assert len(loader) == 3
 
     def test_getitem_without_identifiers(self, temp_dataset_dir):
-        loader = FileLoader(root_folder=temp_dataset_dir, yield_identifiers=False)
+        loader = FileDataset(root_folder=temp_dataset_dir, yield_identifiers=False)
         data = loader[0]
         assert isinstance(data, np.ndarray)
 
     def test_getitem_with_identifiers(self, temp_dataset_dir):
-        loader = FileLoader(root_folder=temp_dataset_dir, yield_identifiers=True)
+        loader = FileDataset(root_folder=temp_dataset_dir, yield_identifiers=True)
         patient, trial, data = loader[0]
         assert patient is not None or patient is None  # May or may not match regex
         assert isinstance(data, np.ndarray)
 
     def test_iter(self, temp_dataset_dir):
-        loader = FileLoader(root_folder=temp_dataset_dir, yield_identifiers=False)
+        loader = FileDataset(root_folder=temp_dataset_dir, yield_identifiers=False)
         count = 0
         for data in loader:
             assert isinstance(data, np.ndarray)
@@ -165,7 +165,7 @@ class TestFileLoader:
         assert count == len(loader)
 
     def test_iter_with_identifiers(self, temp_dataset_dir):
-        loader = FileLoader(root_folder=temp_dataset_dir, yield_identifiers=True)
+        loader = FileDataset(root_folder=temp_dataset_dir, yield_identifiers=True)
         count = 0
         for patient, trial, data in loader:
             assert isinstance(data, np.ndarray)
@@ -173,21 +173,21 @@ class TestFileLoader:
         assert count == len(loader)
 
     def test_regex_patient(self, temp_dataset_dir):
-        loader = FileLoader(root_folder=temp_dataset_dir)
+        loader = FileDataset(root_folder=temp_dataset_dir)
         assert loader._regex_patient("patient5_trial3.npy") == 5
         assert loader._regex_patient("p10_t2.npy") == 10
         assert loader._regex_patient("Patient100_data.npy") == 100
         assert loader._regex_patient("no_patient.npy") is None
 
     def test_regex_trial(self, temp_dataset_dir):
-        loader = FileLoader(root_folder=temp_dataset_dir)
+        loader = FileDataset(root_folder=temp_dataset_dir)
         assert loader._regex_trial("patient5_trial3.npy") == 3
         assert loader._regex_trial("p10_t2.npy") == 2
         assert loader._regex_trial("data_Trial50.npy") == 50
         assert loader._regex_trial("no_trial.npy") is None
 
     def test_infer_from_path_identifiers(self, temp_dataset_dir):
-        loader = FileLoader(root_folder=temp_dataset_dir)
+        loader = FileDataset(root_folder=temp_dataset_dir)
         patient, trial = loader._infer_from_path_identifiers("patient3_trial7.npy")
         assert patient == 3
         assert trial == 7
@@ -239,59 +239,59 @@ class TestCustomTestDataset:
         shutil.rmtree(temp_dir)
 
     def test_init_with_files(self, temp_dataset_dir):
-        dataset = CustomTestDataset(root_folder=temp_dataset_dir, nsamples=3)
+        dataset = TestTorchDataset(root_folder=temp_dataset_dir, nsamples=3)
         assert len(dataset) == 3
         assert dataset.use_files is True
 
     def test_init_without_files(self):
-        dataset = CustomTestDataset(root_folder=None, nsamples=10, shape=(25, 7, 5, 250))
+        dataset = TestTorchDataset(root_folder=None, nsamples=10, shape=(25, 7, 5, 250))
         assert len(dataset) == 10
         assert dataset.use_files is False
 
     def test_getitem_with_files(self, temp_dataset_dir):
-        dataset = CustomTestDataset(root_folder=temp_dataset_dir, nsamples=2)
+        dataset = TestTorchDataset(root_folder=temp_dataset_dir, nsamples=2)
         data = dataset[0]
         assert isinstance(data, np.ndarray)
         assert data.shape == (25, 7, 5, 250)
 
     def test_getitem_without_files(self):
-        dataset = CustomTestDataset(root_folder=None, nsamples=5, shape=(25, 7, 5, 250))
+        dataset = TestTorchDataset(root_folder=None, nsamples=5, shape=(25, 7, 5, 250))
         data = dataset[0]
         assert isinstance(data, torch.Tensor)
         assert data.shape == (25, 7, 5, 250)
         assert data.dtype == torch.float32
 
     def test_random_seed_consistency(self):
-        dataset = CustomTestDataset(root_folder=None, nsamples=3, shape=(10, 10))
+        dataset = TestTorchDataset(root_folder=None, nsamples=3, shape=(10, 10))
         data1 = dataset[0]
         data2 = dataset[0]
         assert torch.allclose(data1, data2)
 
     def test_different_samples_different_data(self):
-        dataset = CustomTestDataset(root_folder=None, nsamples=3, shape=(10, 10))
+        dataset = TestTorchDataset(root_folder=None, nsamples=3, shape=(10, 10))
         data1 = dataset[0]
         data2 = dataset[1]
         assert not torch.allclose(data1, data2)
 
     def test_nsamples_exceeds_available_files(self, temp_dataset_dir):
-        dataset = CustomTestDataset(root_folder=temp_dataset_dir, nsamples=100)
+        dataset = TestTorchDataset(root_folder=temp_dataset_dir, nsamples=100)
         # Should use all available files
         assert len(dataset) == 5
 
     def test_len(self):
-        dataset = CustomTestDataset(root_folder=None, nsamples=7)
+        dataset = TestTorchDataset(root_folder=None, nsamples=7)
         assert len(dataset) == 7
 
     def test_custom_shape(self):
         custom_shape = (10, 20, 30)
-        dataset = CustomTestDataset(root_folder=None, nsamples=2, shape=custom_shape)
+        dataset = TestTorchDataset(root_folder=None, nsamples=2, shape=custom_shape)
         data = dataset[0]
         assert data.shape == custom_shape
 
     def test_file_sampling_is_random(self, temp_dataset_dir):
         # Create two datasets with same parameters but different random state
-        dataset1 = CustomTestDataset(root_folder=temp_dataset_dir, nsamples=3)
-        dataset2 = CustomTestDataset(root_folder=temp_dataset_dir, nsamples=3)
+        dataset1 = TestTorchDataset(root_folder=temp_dataset_dir, nsamples=3)
+        dataset2 = TestTorchDataset(root_folder=temp_dataset_dir, nsamples=3)
         
         # The selected files might be different due to random choice
         # Just verify both have valid data
@@ -311,12 +311,12 @@ class TestEdgeCases:
         assert len(dataset) == 0
 
     def test_custom_test_dataset_zero_samples(self):
-        dataset = CustomTestDataset(root_folder=None, nsamples=0)
+        dataset = TestTorchDataset(root_folder=None, nsamples=0)
         assert len(dataset) == 0
 
     def test_file_loader_regex_case_insensitive(self):
         temp_dir = tempfile.mkdtemp()
-        loader = FileLoader(root_folder=temp_dir)
+        loader = FileDataset(root_folder=temp_dir)
         
         # Test case insensitivity
         assert loader._regex_patient("PATIENT5.npy") == 5

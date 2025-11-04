@@ -5,10 +5,10 @@ import numpy as np
 from dotenv import load_dotenv
 
 from packages.data_objects.signal import EegSignal
-from packages.data_objects.dataset import FileLoader
+from packages.data_objects.dataset import FileDataset
 from packages.io.output_packager import save_signal
 from packages.processing import misc, tensor_reshape, wavelet
-from test import debug_constants
+from scripts import debug_constants
 
 
 def main():
@@ -20,7 +20,7 @@ def main():
         eeg_data = np.array(input["trial_eeg"])
         return eeg_data
 
-    loader = FileLoader(
+    loader = FileDataset(
         root_folder=base_folder, yield_identifiers=True, unpack_func=unpack)
 
         

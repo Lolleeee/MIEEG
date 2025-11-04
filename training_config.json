@@ -1,0 +1,66 @@
+{
+  "model_class": "vqvae_skip",
+  "model_kwargs": {
+    "latent_dim": 64,
+    "num_embeddings": 512
+  },
+  "dataset": {
+    "dataset_type": "torch_dataset",
+    "dataset_args": {
+      "data_path": "/path/to/data",
+      "normalize": true
+    },
+    "data_loader": {
+      "set_sizes": {
+        "train": 0.6,
+        "val": 0.2,
+        "test": 0.2
+      },
+      "batch_size": 64,
+      "norm_axes": null
+    }
+  },
+  "loss": "mse",
+  "optimizer": {
+    "type": "adamw",
+    "lr": 0.0003,
+    "asym_lr": null,
+    "weight_decay": 1e-05
+  },
+  "gradient_control": {
+    "grad_clip": 1.0,
+    "use_amp": true,
+    "grad_logging_interval": null
+  },
+  "train_loop": {
+    "batch_size": 64,
+    "epochs": 100
+  },
+  "helpers": {
+    "early_stopping": {
+      "patience": 30,
+      "min_delta": 0.0
+    },
+    "backup_manager": {
+      "backup_interval": 10,
+      "backup_path": "./model_backups"
+    },
+    "reduce_lr_on_plateau": {
+      "mode": "min",
+      "patience": 20,
+      "factor": 0.1
+    }
+  },
+  "info": {
+    "history_plot": {
+      "state": "extended",
+      "save_path": "./plots",
+      "plot_composite_loss": false
+    },
+    "metrics": [
+      "mae",
+      "rmse"
+    ]
+  },
+  "device": "cuda"
+}

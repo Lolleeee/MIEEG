@@ -10,7 +10,7 @@ import scipy.io as sio
 from dotenv import load_dotenv
 
 from packages.data_objects.signal import EegSignal, KinematicSignal
-from packages.io.file_loader import FileLoader
+from packages.io.torch_dataloaders import FileLoader
 from packages.io.output_packager import save_signal
 from packages.processing import misc, sensor_data, tensor_reshape, wavelet
 from packages.test import debug_constants

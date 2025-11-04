@@ -1,7 +1,7 @@
 from dotenv import load_dotenv
 import torch
-from packages.data_objects.dataset import CustomTestDataset, TorchDataset
-from packages.io.file_loader import get_data_loaders
+from packages.data_objects.dataset import TestTorchDataset, TorchDataset
+from packages.io.torch_dataloaders import get_data_loaders
 from packages.plotting.tensor_plots import plot_dimension_distribuitions
 from packages.processing.misc import calculate_global_normalization_params
 load_dotenv()

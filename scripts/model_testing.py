@@ -3,8 +3,8 @@ import argparse
 from pyparsing import Dict
 import torch
 
-from packages.data_objects.dataset import CustomTestDataset, Dataset
-from packages.io.file_loader import get_test_loader
+from packages.data_objects.dataset import TestTorchDataset, Dataset
+from packages.io.torch_dataloaders import get_test_loader
 
 
 from packages.plotting.reconstruction_plots import plot_reconstruction_distribution
@@ -92,7 +92,7 @@ class ModelTester:
     def run_dummy_training_loop(self, criterion, optimizer, dataset_params: Dict=None, device='cpu', epochs=5, batch_size=8):
         if dataset_params is None:
             dataset_params = {}
-        dataset = CustomTestDataset(**dataset_params)
+        dataset = TestTorchDataset(**dataset_params)
         test_loader = get_test_loader(dataset, batch_size=batch_size, num_workers=4)
         task_handler = TaskHandler(loader=test_loader)
 

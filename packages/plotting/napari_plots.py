@@ -1,5 +1,5 @@
 from typing import List
-from packages.io.file_loader import FileLoader
+from packages.io.torch_dataloaders import FileLoader
 import napari
 import numpy as np
 

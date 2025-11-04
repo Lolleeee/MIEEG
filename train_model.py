@@ -1,6 +1,6 @@
 from packages.models.autoencoder import Conv3DAE
 from packages.train.training import train_model
-from packages.io.file_loader import get_data_loaders
+from packages.io.torch_dataloaders import get_data_loaders
 import torch
 import os
 from packages.data_objects.dataset import Dataset
