@@ -11,61 +11,80 @@ from typing import Callable, Dict, List
 from torch.amp.grad_scaler import GradScaler
 from packages.train.trainer_config_schema import TrainerConfig
 from packages.io.torch_dataloaders import get_data_loaders
+
 logging.basicConfig(
     level=logging.INFO,
     format='[%(levelname)s] %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)],
     force=True
 )
-
+# TODO check if random seed works for model initialization
 
 class MetricsHandler:
     def __init__(self, loss: TorchLoss, metrics: List[TorchMetric]):
         
         assert isinstance(loss, TorchLoss), "Loss must be an instance of TorchLoss."
         assert all(isinstance(metric, TorchMetric) for metric in metrics), "All metrics must be instances of TorchMetric."
-        self.metrics = {metric.name: metric for metric in metrics}
-        self.loss = loss
+        
+        self.loss: TorchLoss = loss
+        self.metrics: Dict[str, TorchMetric] = {metric.name: metric for metric in metrics}
+        self.metrics_eval: Dict[str, float] = {}
+        self._initialize_metrics_eval_dict()
+
+        self.epoch_samples_count: int = 0
+        self.current_epoch: int = 0
         self._new_epoch_setup()
+
+        self.loss_eval: torch.Tensor = None
 
     def _batch_step(self, outputs, batch, detach: bool = False):
 
-        if isinstance(batch, tuple) or isinstance(batch, list):
-            batch_size = batch[0].size(0)
-        else:
-            batch_size = batch.size(0)
+        assert isinstance(batch, torch.Tensor), "Batch must be a torch.Tensor."
 
         if detach:
             outputs = self.detach_outputs(outputs)
 
-        self.samples_count += batch_size
+        self.epoch_samples_count += batch.size(0)
 
-        self.batch_loss_eval = self.loss(outputs, batch)
-        assert self.batch_loss_eval.item() >= 0 and not torch.isnan(self.batch_loss_eval) and not torch.isinf(self.batch_loss_eval), \
-            f"Batch loss is invalid with value {self.batch_loss_eval.item()}."
+        batch_loss_eval_dict = self.loss(outputs, batch)
+        
+        # Main loss value to be backpropagated
+        loss_eval = batch_loss_eval_dict['loss']
 
-        self.epoch_loss += self.batch_loss_eval.item() * batch_size
+        # Accumulate loss into metrics dict
+        for loss_comp_name, value in batch_loss_eval_dict.items():
+            if isinstance(value, torch.Tensor) and value.device != torch.device('cpu'):
+                value = value.detach().cpu()
+            self.metrics_eval[loss_comp_name] += value * batch.size(0)
 
+        # Accumulate metrics
         for metric_name, metric in self.metrics.items():
-            eval = metric(outputs, batch)
+            value = metric(outputs, batch)
+            self.metrics_eval[metric_name] += value * batch.size(0)
 
-            self.metrics_eval[metric_name] += eval * batch_size
-
-        return self.batch_loss_eval
+        return loss_eval
 
     def _end_epoch_step(self):
-        assert self.samples_count > 0, "No samples were processed in this epoch."
-        assert self.epoch_loss >= 0, "Epoch loss is negative, which is invalid."
+        assert self.epoch_samples_count > 0, "No samples were processed in this epoch."
         assert all(value >= 0 for value in self.metrics_eval.values()), "One or more metric evaluations are negative, which is invalid."
 
-        self.epoch_loss /= self.samples_count
-        self.epoch_metrics = {metric_name: metric_eval / self.samples_count for metric_name, metric_eval in self.metrics_eval.items()}
-
+        # Scaling metrics by number of samples
+        self.metrics_eval['epoch'] = self.current_epoch
+        self.metrics_eval = self.scale_loss_dict(self.metrics_eval, 1.0 / self.epoch_samples_count)
+        
     def _new_epoch_setup(self):
-        self.epoch_loss = 0.0
-        self.metrics_eval = {metric_name: 0.0 for metric_name in self.metrics}
-        self.samples_count = 0
+        self.current_epoch += 1
+        self.epoch_samples_count = 0
+        self.metrics_eval = {metric_name: 0.0 for metric_name in self.metrics_eval.keys()}
 
+    def _initialize_metrics_eval_dict(self):
+        self.metrics_eval['epoch'] = 0
+
+        for metric in self.metrics.values():
+            self.metrics_eval[metric.name] = 0.0
+
+        for key in self.loss.expected_loss_keys:
+            self.metrics_eval[key] = 0.0
 
     @staticmethod
     def detach_outputs(outputs):
@@ -80,6 +99,10 @@ class MetricsHandler:
                 return outputs.detach().cpu()
             return outputs
     
+    @staticmethod
+    def scale_loss_dict(loss_dict: dict, factor: float) -> dict:
+        """Multiply each scalar in a loss dict by a constant factor."""
+        return {k: v * factor for k, v in loss_dict.items()}
 
 
 
@@ -173,11 +196,9 @@ class Trainer():
         # Initialize optimizer with lr and weight decay
         self._optimizer_init()
 
-        self.helper_handler = HelperHandler(self.config, self.model, self.optimizer)
-
         self.metrics_handler = MetricsHandler(self.loss_criterion, self.metrics)
 
-        self.current_epoch = 0
+        self.helper_handler = HelperHandler(self)
 
     def start(self):
 
@@ -185,6 +206,7 @@ class Trainer():
 
         self._start_test_eval()
 
+        self.helper_handler._call_end_train_step()
 
     def _start_train_loop(self):
         #THINGS
@@ -197,20 +219,22 @@ class Trainer():
         with tqdm(desc="Epochs", total=self.config.train_loop.epochs, position=1, leave=True) as Epochpbar:
             for epoch in range(self.config.train_loop.epochs):
 
-                epoch_loss, epoch_metrics = self._train_epoch()
+                self.model.train()
 
-                self.helper_handler._call_end_train_epoch_step(epoch, epoch_loss, epoch_metrics)
+                epoch_metrics = self._train_epoch()
 
-                val_loss, val_metrics = self._start_val_loop()
+                self.helper_handler._call_end_train_epoch_step(epoch_metrics)
 
-                self.helper_handler._call_end_val_step(epoch, val_loss, val_metrics)
-                
-                if self.helper_handler.stop_early:
+                val_metrics = self._start_val_loop()
+
+                self.helper_handler._call_end_val_step(val_metrics)
+
+                if 'early_stopping' in self.helper_handler.helpers and self.helper_handler.helpers['early_stopping'].stop_early:
                     logging.info("Early stopping triggered. Ending training loop.")
                     break
 
                 Epochpbar.update()
-                Epochpbar.set_postfix({'Epoch Loss': val_loss})
+                Epochpbar.set_postfix({'Epoch Loss': val_metrics.get('loss', "No loss found")})
 
     def _train_epoch(self):
         self.metrics_handler._new_epoch_setup()
@@ -237,10 +261,12 @@ class Trainer():
 
                 Batchpbar.update()
                 Batchpbar.set_postfix({'Batch Loss': batch_loss_eval.item()})
+                
             self.metrics_handler._end_epoch_step()
-            epoch_loss = self.metrics_handler.epoch_loss
-            self.current_epoch += 1
-            return epoch_loss, self.metrics_handler.epoch_metrics
+
+            epoch_metrics = self.metrics_handler.metrics_eval
+
+            return epoch_metrics
         
     def _start_val_loop(self):
         #TRACKED AND SCHEDULERS UPDATE ABOUT VALIDATION
@@ -254,9 +280,11 @@ class Trainer():
 
                 outputs = self.model(batch)
 
-                val_loss = self.metrics_handler._batch_step(outputs, batch, detach=True)
+                self.metrics_handler._batch_step(outputs, batch, detach=True)
 
-        return val_loss, self.metrics_handler.epoch_metrics
+        val_metrics = self.metrics_handler.metrics_eval
+
+        return val_metrics
     
     def _start_test_eval(self):
 
@@ -270,9 +298,8 @@ class Trainer():
                 outputs = self.model(batch)
 
                 self.metrics_handler._batch_step(outputs, batch, detach=True)
-        test_loss = self.metrics_handler.epoch_loss
-        test_metrics = self.metrics_handler.epoch_metrics
-        logging.info(f"Test Loss: {test_loss:.4f}")
+
+        test_metrics = self.metrics_handler.metrics_eval
         for metric_name, metric_value in test_metrics.items():
             logging.info(f"Test {metric_name}: {metric_value:.4f}")
         

@@ -36,6 +36,12 @@ class LossType(str, Enum):
 
 
 class DatasetType(str, Enum):
+    """
+     Dataset types available for training.
+    Options:
+    - TORCH_DATASET: Standard TorchDataset class.
+    - TEST_TORCH_DATASET: A simple test dataset for unit testing.
+    """
     TORCH_DATASET = "torch_dataset"
     TEST_TORCH_DATASET = "test_torch_dataset"
 
@@ -138,16 +144,32 @@ class Optimizer(BaseModel):
 class TrainLoop(BaseModel):
     epochs: int = Field(default=50, gt=0)
 
+class PlotType(str, Enum):
+    """Plotting states for training history visualization.
+    Options:
+    - TIGHT: Plot metrics and loss in the same figure.
+    - EXTENDED: Plot metrics and loss in separate figures.
+    - OFF: Disable plotting.
+    """
+    TIGHT = 'tight'
+    EXTENDED = 'extended'
+    OFF = 'off'
+
+class HistoryPlotSchema(BaseModel):
+    plot_type: PlotType = Field(default=PlotType.TIGHT)
+    save_path: str = Field(default='./training_history')
 
 class EarlyStoppingSchema(BaseModel):
     patience: int = Field(default=30, gt=0)
     min_delta: float = Field(default=0.0, ge=0.0)
-
+    metric: str = Field(default="loss")
+    mode: Literal["min", "max"] = Field(default="min")
 
 class BackupManagerSchema(BaseModel):
     backup_interval: int = Field(default=10, gt=0)
     backup_path: str = Field(default="./model_backups")
-
+    metric: str = Field(default="loss")
+    mode : Literal["min", "max"] = Field(default="min")
 
 class ReduceLROnPlateauSchema(BaseModel):
     mode: Literal["min", "max"] = Field(default="min")
@@ -157,7 +179,10 @@ class ReduceLROnPlateauSchema(BaseModel):
 class GradientLoggerSchema(BaseModel):
     interval: Optional[int] = Field(default=None, gt=0)
 
+# TODO Add model validation between TorchLoss+TorchMetric keys to match helpers metrics chosen 
+# TODO Add Model output keys validation maybe?
 class Helpers(BaseModel):
+    history_plot: Optional[HistoryPlotSchema] = Field(default_factory=HistoryPlotSchema)
     early_stopping: Optional[EarlyStoppingSchema] = Field(default_factory=EarlyStoppingSchema)
     backup_manager: Optional[BackupManagerSchema] = Field(default_factory=BackupManagerSchema)
     reduce_lr_on_plateau: Optional[ReduceLROnPlateauSchema] = Field(default_factory=ReduceLROnPlateauSchema)
@@ -168,21 +193,7 @@ class GradientControl(BaseModel):
     use_amp: bool = Field(default=False)
     grad_logging_interval: Optional[int] = Field(default=None, gt=0)
 
-
-class PlotStates(str, Enum):
-    TIGHT = 'tight'
-    EXTENDED = 'extended'
-    OFF = 'off'
-
-
-class HistoryPlot(BaseModel):
-    state: PlotStates = Field(default=PlotStates.TIGHT)
-    save_path: str = Field(default='./training_history')
-    plot_composite_loss: bool = Field(default=False)
-
-
 class Info(BaseModel):
-    history_plot: HistoryPlot = Field(default_factory=HistoryPlot)
     metrics: List[MetricType] = Field(default_factory=list)
     metrics_args: Optional[List[dict]] = Field(default=None)
     @property

@@ -228,7 +228,6 @@ class TestTorchDataset(TorchDataset):
         torch.manual_seed(RANDOM_SEED)
         indices = torch.randperm(len(self.item_list))[:self.nsamples]
         self.item_list = [self.item_list[i] for i in indices]
-        print(__class__.__name__)
         logging.info(f"Sampling {self.nsamples} items.")
         
     def _get_random_item_list(self):

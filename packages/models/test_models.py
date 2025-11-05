@@ -132,14 +132,9 @@ class SimpleVQVAE(nn.Module):
         
         # Decode
         reconstruction = self.decode(z_q)
-        
-        # Return tuple: (reconstruction, auxiliary_outputs)
-        aux_outputs = {
-            'commitment_loss': quant_info['commitment_loss'],
-            'codebook_loss': quant_info['codebook_loss'],
-        }
-        
-        return reconstruction, z_q, aux_outputs
+
+        return {'reconstruction': reconstruction, 'embeddings': z_q, 'commitment_loss': quant_info['commitment_loss'],
+            'codebook_loss': quant_info['codebook_loss']}
 
 
 class TinyMLPClassifier(nn.Module):

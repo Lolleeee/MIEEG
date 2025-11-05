@@ -20,8 +20,8 @@ from packages.train.trainer_config_schema import (
     BackupManagerSchema,
     ReduceLROnPlateauSchema,
     GradientLoggerSchema,
-    HistoryPlot,
-    PlotStates,
+    HistoryPlotSchema,
+    PlotType,
     ModelType,
     OptimizerType,
     LossType,
@@ -333,7 +333,6 @@ def test_gradientcontrol_accepts_none_grad_clip():
 def test_info_defaults():
     """Test Info default values"""
     info = Info()
-    assert isinstance(info.history_plot, HistoryPlot)
     assert info.metrics == []
     assert info.metrics_args is None
 
@@ -363,22 +362,19 @@ def test_info_with_metric_args():
 
 def test_historyplot_defaults():
     """Test HistoryPlot default values"""
-    hp = HistoryPlot()
-    assert hp.state == PlotStates.TIGHT
+    hp = HistoryPlotSchema()
+    assert hp.plot_type == PlotType.TIGHT
     assert hp.save_path == './training_history'
-    assert hp.plot_composite_loss is False
 
 
 def test_historyplot_custom_values():
     """Test HistoryPlot with custom values"""
-    hp = HistoryPlot(
-        state=PlotStates.EXTENDED,
+    hp = HistoryPlotSchema(
+        plot_type=PlotType.EXTENDED,
         save_path="/custom/path",
-        plot_composite_loss=True
     )
-    assert hp.state == PlotStates.EXTENDED
+    assert hp.plot_type == PlotType.EXTENDED
     assert hp.save_path == "/custom/path"
-    assert hp.plot_composite_loss is True
 
 
 # ===== ModelConfig Tests =====
@@ -572,13 +568,15 @@ def test_config_roundtrip_with_all_fields(tmp_path):
         ),
         train_loop=TrainLoop(epochs=100),
         helpers=Helpers(
+            history_plot=HistoryPlotSchema(state=PlotType.EXTENDED, plot_composite_loss=True),
             early_stopping=EarlyStoppingSchema(patience=20, min_delta=0.001),
             backup_manager=BackupManagerSchema(backup_interval=5, backup_path="/backups"),
-            reduce_lr_on_plateau=ReduceLROnPlateauSchema(mode="max", patience=15, factor=0.2)
+            reduce_lr_on_plateau=ReduceLROnPlateauSchema(mode="max", patience=15, factor=0.2),
+            gradient_logger=GradientLoggerSchema(interval=10)
         ),
         info=Info(
             metrics=[MetricType.MAE, MetricType.RMSE],
-            history_plot=HistoryPlot(state=PlotStates.EXTENDED, plot_composite_loss=True)
+            history_plot=HistoryPlotSchema(state=PlotType.EXTENDED, plot_composite_loss=True)
         ),
         device="cuda"
     )

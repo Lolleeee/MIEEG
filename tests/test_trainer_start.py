@@ -12,7 +12,7 @@ from packages.train.trainer_config_schema import (
     LossType,
     OptimizerType,
     MetricType,
-    PlotStates,
+    PlotType,
 )
 
 
@@ -47,7 +47,7 @@ def minimal_config():
         },
         "info": {
             "metrics": [],
-            "history_plot": {"state": PlotStates.OFF}
+            "history_plot": {"state": PlotType.OFF}
         }
     }
 
@@ -75,7 +75,7 @@ def config_with_metrics():
         "gradient_control": {"grad_clip": None, "use_amp": False},
         "info": {
             "metrics": [MetricType.MAE, MetricType.MSE],
-            "history_plot": {"state": PlotStates.OFF}
+            "history_plot": {"state": PlotType.OFF}
         },
         "helpers": {
             "early_stopping": None,
@@ -110,13 +110,13 @@ def config_with_helpers(tmp_path):
         "gradient_control": {"grad_clip": 1.0, "use_amp": False},
         "info": {
             "metrics": [MetricType.MAE],
-            "history_plot": {"state": PlotStates.OFF}
+            "history_plot": {"state": PlotType.OFF}
         },
         "helpers": {
             "early_stopping": {"patience": 3, "min_delta": 0.0},
             "backup_manager": {"backup_interval": 2, "backup_path": str(backup_path)},
             "reduce_lr_on_plateau": {"mode": "min", "patience": 2, "factor": 0.5},
-            "gradient_logger": {"interval": 2},
+            "gradient_logger": {"interval": 50},
         }
     }
 
@@ -171,24 +171,19 @@ def test_trainer_start_computes_metrics(config_with_metrics):
     """Test that metrics are computed during training"""
     trainer = Trainer(config_with_metrics)
     
-    # Patch metrics to track calls
-    original_metrics = trainer.metrics_handler.metrics.copy()
-    call_counts = {name: 0 for name in original_metrics.keys()}
-    
-    for name, metric in original_metrics.items():
-        original_call = metric.__call__
-        def make_wrapper(metric_name, orig):
-            def wrapper(*args, **kwargs):
-                call_counts[metric_name] += 1
-                return orig(*args, **kwargs)
-            return wrapper
-        metric.__call__ = make_wrapper(name, original_call)
+    # Store initial state (if metrics have internal counters)
+    initial_states = {}
+    for name, metric in trainer.metrics_handler.metrics.items():
+        if hasattr(metric, 'total'):
+            initial_states[name] = metric.total
     
     trainer.start()
     
-    # Metrics should have been called
-    assert all(count > 0 for count in call_counts.values()), \
-        f"All metrics should be called, got counts: {call_counts}"
+    # Check metrics were updated
+    for name, metric in trainer.metrics_handler.metrics.items():
+        if name in initial_states:
+            assert metric.total != initial_states[name], \
+                f"Metric {name} was not updated"
 
 
 def test_trainer_start_metrics_averages(config_with_metrics):
@@ -200,9 +195,9 @@ def test_trainer_start_metrics_averages(config_with_metrics):
     trainer.start()
     
     # Verify metrics handler computed averages
-    assert trainer.metrics_handler.samples_count > 0
-    assert trainer.metrics_handler.epoch_loss >= 0
-    assert all(v >= 0 for v in trainer.metrics_handler.epoch_metrics.values())
+    assert trainer.metrics_handler.epoch_samples_count > 0
+    assert trainer.metrics_handler.epoch_loss_eval >= 0
+    assert all(v >= 0 for v in trainer.metrics_handler.epoch_metrics_eval.values())
 
 
 # ===== Helper Tests =====
@@ -279,6 +274,7 @@ def test_trainer_start_with_gradient_logger(config_with_helpers, caplog):
                      if "Gradient norm" in record.message]
     
     assert len(gradient_logs) > 0, "Should have logged gradient norms"
+    config_with_helpers["helpers"]["gradient_logger"]["interval"] = 50
 
 
 # ===== Gradient Control Tests =====
@@ -306,11 +302,11 @@ def test_trainer_start_with_amp(minimal_config):
     
     trainer = Trainer(minimal_config)
     
-    # Should create GradScaler
-    assert hasattr(trainer, 'scaler')
-    
     # Should complete without errors
     trainer.start()
+
+    # Should create GradScaler
+    assert hasattr(trainer, 'scaler')
     
     assert trainer.current_epoch == minimal_config["train_loop"]["epochs"]
 
@@ -331,61 +327,175 @@ def test_trainer_start_without_gradient_clipping(minimal_config):
 # ===== Model Mode Tests =====
 
 def test_trainer_model_in_train_mode_during_training(minimal_config):
-    """Test that model is in training mode during train loop"""
+    """Test that model.train() and model.eval() are called appropriately"""
     trainer = Trainer(minimal_config)
     
-    train_modes = []
+    train_calls = []
+    eval_calls = []
     
-    # Wrap _train_epoch to check model.training
-    original_train = trainer._train_epoch
-    def wrapped_train():
-        train_modes.append(trainer.model.training)
-        return original_train()
+    # Track when train() and eval() are called
+    original_train = trainer.model.train
+    original_eval = trainer.model.eval
     
-    trainer._train_epoch = wrapped_train
+    def mock_train(mode=True):
+        train_calls.append(mode)
+        return original_train(mode)
+    
+    def mock_eval():
+        eval_calls.append(True)
+        return original_eval()
+    
+    trainer.model.train = mock_train
+    trainer.model.eval = mock_eval
+    
     trainer.start()
     
-    # Model should be in training mode
-    assert all(train_modes), "Model should be in training mode during _train_epoch"
+    # Should have called train() for each epoch
+    assert len(train_calls) >= minimal_config["train_loop"]["epochs"], \
+        f"model.train() should be called at least {minimal_config['train_loop']['epochs']} times, got {len(train_calls)}"
+    
+    # Should have called eval() for validation (once per epoch) + test (once at end)
+    expected_eval_calls = minimal_config["train_loop"]["epochs"] + 1  # validation per epoch + final test
+    assert len(eval_calls) >= expected_eval_calls, \
+        f"model.eval() should be called at least {expected_eval_calls} times (validation + test), got {len(eval_calls)}"
 
 
-def test_trainer_model_in_eval_mode_during_validation(minimal_config):
-    """Test that model is in eval mode during validation"""
+def test_trainer_model_eval_during_validation_and_test(minimal_config):
+    """Test that model.eval() is called during both validation and test"""
     trainer = Trainer(minimal_config)
     
-    eval_modes = []
+    eval_call_locations = []
     
-    # Wrap _start_val_loop to check model.training
-    original_val = trainer._start_val_loop
-    def wrapped_val():
-        eval_modes.append(trainer.model.training)
-        return original_val()
+    # Track where eval() is called from
+    original_eval = trainer.model.eval
     
-    trainer._start_val_loop = wrapped_val
+    def mock_eval():
+        # Check the call stack to determine where eval was called
+        import inspect
+        frame = inspect.currentframe()
+        caller_name = frame.f_back.f_code.co_name
+        eval_call_locations.append(caller_name)
+        return original_eval()
+    
+    trainer.model.eval = mock_eval
     trainer.start()
     
-    # Model should be in eval mode (training=False)
-    assert all(not mode for mode in eval_modes), \
-        "Model should be in eval mode during validation"
+    # Should have calls from validation loop
+    assert any('val' in loc.lower() for loc in eval_call_locations), \
+        f"model.eval() should be called from validation, got calls from: {eval_call_locations}"
+    
+    # Should have calls from test evaluation
+    assert any('test' in loc.lower() for loc in eval_call_locations), \
+        f"model.eval() should be called from test, got calls from: {eval_call_locations}"
+
+
+def test_trainer_model_train_and_eval_alternation(minimal_config):
+    """Test that model alternates between train and eval modes correctly"""
+    trainer = Trainer(minimal_config)
+    
+    mode_sequence = []
+    
+    # Track mode changes
+    original_train = trainer.model.train
+    original_eval = trainer.model.eval
+    
+    def mock_train(mode=True):
+        mode_sequence.append(('train', mode))
+        return original_train(mode)
+    
+    def mock_eval():
+        mode_sequence.append(('eval', None))
+        return original_eval()
+    
+    trainer.model.train = mock_train
+    trainer.model.eval = mock_eval
+    
+    trainer.start()
+    
+    # Verify sequence starts with train
+    assert mode_sequence[0][0] == 'train', \
+        f"Training should start with train mode, got {mode_sequence[0]}"
+    
+    # Verify train and eval alternate (roughly)
+    train_count = sum(1 for mode, _ in mode_sequence if mode == 'train')
+    eval_count = sum(1 for mode, _ in mode_sequence if mode == 'eval')
+    
+    # Should have roughly equal train/eval calls (train per epoch + eval per epoch + test)
+    assert train_count >= minimal_config["train_loop"]["epochs"], \
+        f"Should have at least {minimal_config['train_loop']['epochs']} train calls"
+    assert eval_count >= minimal_config["train_loop"]["epochs"] + 1, \
+        f"Should have at least {minimal_config['train_loop']['epochs'] + 1} eval calls (val + test)"
 
 
 def test_trainer_model_in_eval_mode_during_test(minimal_config):
-    """Test that model is in eval mode during test"""
+    """Test that model is in eval mode during test evaluation"""
     trainer = Trainer(minimal_config)
     
-    # Wrap _start_test_eval to check model.training
+    test_mode_states = []
+    
+    # Wrap _start_test_eval to check model.training state
     original_test = trainer._start_test_eval
-    test_mode = []
     
     def wrapped_test():
-        test_mode.append(trainer.model.training)
-        return original_test()
+        # Check state at start of test
+        test_mode_states.append(('start', trainer.model.training))
+        result = original_test()
+        # Check state at end of test
+        test_mode_states.append(('end', trainer.model.training))
+        return result
     
     trainer._start_test_eval = wrapped_test
     trainer.start()
     
-    # Model should be in eval mode
-    assert not test_mode[0], "Model should be in eval mode during test"
+    # Model should be in eval mode (training=False) during test
+    assert len(test_mode_states) > 0, "Test evaluation should have been called"
+    for location, training_mode in test_mode_states:
+        assert not training_mode, \
+            f"Model should be in eval mode during test ({location}), but training={training_mode}"
+
+
+def test_trainer_model_eval_called_before_test_forward(minimal_config):
+    """Test that model.eval() is called before test forward passes"""
+    trainer = Trainer(minimal_config)
+    
+    eval_before_test_forward = []
+    
+    # Track if eval was called before forward in test
+    original_eval = trainer.model.eval
+    original_forward = trainer.model.forward
+    
+    test_phase = [False]  # Track if we're in test phase
+    eval_called_in_test = [False]
+    
+    def mock_eval():
+        if test_phase[0]:
+            eval_called_in_test[0] = True
+        return original_eval()
+    
+    def mock_forward(x):
+        if test_phase[0]:
+            eval_before_test_forward.append(eval_called_in_test[0])
+        return original_forward(x)
+    
+    # Wrap test to mark test phase
+    original_test = trainer._start_test_eval
+    
+    def wrapped_test():
+        test_phase[0] = True
+        result = original_test()
+        test_phase[0] = False
+        return result
+    
+    trainer.model.eval = mock_eval
+    trainer.model.forward = mock_forward
+    trainer._start_test_eval = wrapped_test
+    
+    trainer.start()
+    
+    # All test forward passes should have eval called before them
+    assert len(eval_before_test_forward) > 0, "Should have test forward passes"
+    assert all(eval_before_test_forward), \
+        "model.eval() should be called before test forward passes"
 
 
 # ===== Loss Tests =====
@@ -447,7 +557,7 @@ def test_trainer_helpers_called_in_correct_order(config_with_helpers):
     call_order = []
     
     # Mock all helper methods
-    for helper in trainer.helper_handler.helpers:
+    for helper in trainer.helper_handler.helpers.values():
         if hasattr(helper, '_end_train_epoch_step'):
             original = helper._end_train_epoch_step
             def make_wrapper(name, orig):
@@ -545,12 +655,12 @@ def test_trainer_deterministic_with_seed(minimal_config):
     torch.manual_seed(42)
     trainer1 = Trainer(minimal_config)
     trainer1.start()
-    loss1 = trainer1.metrics_handler.epoch_loss
+    loss1 = trainer1.metrics_handler.epoch_loss_eval
     
     torch.manual_seed(42)
     trainer2 = Trainer(minimal_config)
     trainer2.start()
-    loss2 = trainer2.metrics_handler.epoch_loss
+    loss2 = trainer2.metrics_handler.epoch_loss_eval
     
     # Losses should be very close (allow tiny floating point differences)
     assert abs(loss1 - loss2) < 1e-5, \

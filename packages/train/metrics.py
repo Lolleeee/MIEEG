@@ -1,38 +1,30 @@
 import torch
+import torch.nn as nn
+from typing import Dict, Union, List, Tuple
+import logging
+from abc import abstractmethod
 
-
-class TorchMetric():
-    def __init__(self):
-        self.name = "TorchMetric"
-
-    def __call__(self, outputs, targets) -> torch.Tensor:
-        raise NotImplementedError("This method should be overridden by subclasses")
+from packages.train.torch_wrappers import TorchMetric
     
 class MSE(TorchMetric):
     def __init__(self):
-        super().__init__()
+        super().__init__(expected_model_output_keys=['reconstruction'])
         self.name = "MSE"
         self.func = torch.nn.functional.mse_loss
 
     def __call__(self, outputs, targets) -> torch.Tensor:
-        if isinstance(outputs, tuple):
-            outputs = outputs[0]
-        if isinstance(targets, tuple):
-            targets = targets[0]
-        return self.func(outputs, targets)
+        rec = outputs['reconstruction']
+        return self.func(rec, targets)
 
 class MAE(TorchMetric):
     def __init__(self):
-        super().__init__()
+        super().__init__(expected_model_output_keys=['reconstruction'])
         self.name = "MAE"
         self.func = torch.nn.functional.l1_loss
 
     def __call__(self, outputs, targets) -> torch.Tensor:
-        if isinstance(outputs, tuple):
-            outputs = outputs[0]
-        if isinstance(targets, tuple):
-            targets = targets[0]
-        return self.func(outputs, targets)
+        rec = outputs['reconstruction']
+        return self.func(rec, targets)
 
 class RMSE(TorchMetric):
     def __init__(self):
