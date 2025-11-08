@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field, field_validator, ConfigDict, model_valida
 from torch.utils.data import DataLoader
 from torch import nn, optim, cuda
 from torch import device as torchdevice
-from typing import Optional, Literal, List, Any
+from typing import Optional, Literal, List, Any, Union
 from packages.train.metrics import TorchMetric, RMSE, MSE, MAE, AxisCorrelation
 from packages.train.loss import TorchLoss, TorchMSELoss, TorchL1Loss
 from packages.models.vqae_skip import VQVAE as VQVAE_Skip
@@ -101,13 +101,13 @@ class SetSizes(BaseModel):
 
 
 class DataLoaderConfig(BaseModel):
-    set_sizes: SetSizes = Field(default_factory=SetSizes)
+    set_sizes: SetSizes = Field(default_factory=SetSizes, description="Proportions for train/val/test splits")
     batch_size: int = Field(default=32, gt=0)
-    norm_axes: Optional[List[int]] = Field(default=None)
+    norm_axes: Optional[List[int]] = Field(default=None, description="Axes to normalize over")
 
 class DatasetConfig(BaseModel):
-    dataset_type: DatasetType = Field(default=DatasetType.TORCH_DATASET)
-    dataset_args: dict = Field(default_factory=dict)
+    dataset_type: DatasetType = Field(default=DatasetType.TORCH_DATASET, description="Type of dataset to use")
+    dataset_args: dict = Field(default_factory=dict, description="Arguments to instantiate the dataset")
     data_loader: DataLoaderConfig = Field(default_factory=DataLoaderConfig)
 
     # Properties to get actual classes
@@ -118,10 +118,10 @@ class DatasetConfig(BaseModel):
 
 
 class Optimizer(BaseModel):
-    type: OptimizerType = Field(default=OptimizerType.ADAM)
-    lr: float = Field(default=1e-3, gt=0.0)
-    asym_lr: Optional[List[dict]] = Field(default=None)
-    weight_decay: float = Field(default=1e-4, ge=0.0)
+    type: OptimizerType = Field(default=OptimizerType.ADAM, description="Type of optimizer to use")
+    lr: float = Field(default=1e-3, gt=0.0, description="Learning rate")
+    asym_lr: Optional[List[dict]] = Field(default=None, description="Asymmetric learning rates (will be fed to optimizer as parameter groups)")
+    weight_decay: float = Field(default=1e-4, ge=0.0, description="Weight decay")
 
     @field_validator('asym_lr')
     @classmethod
@@ -143,6 +143,7 @@ class Optimizer(BaseModel):
 
 class TrainLoop(BaseModel):
     epochs: int = Field(default=50, gt=0)
+    runtime_validation: Optional[bool] = Field(default=False, description="Whether to perform validation during loops")
 
 class PlotType(str, Enum):
     """Plotting states for training history visualization.
@@ -155,31 +156,31 @@ class PlotType(str, Enum):
     EXTENDED = 'extended'
     OFF = 'off'
 
+
 class HistoryPlotSchema(BaseModel):
-    plot_type: PlotType = Field(default=PlotType.TIGHT)
-    save_path: str = Field(default='./training_history')
+    plot_type: PlotType = Field(default=PlotType.TIGHT, description="Type of plot for training history")
+    save_path: Optional[str] = Field(default='./training_history', description="Path to save the training history plots")
 
 class EarlyStoppingSchema(BaseModel):
-    patience: int = Field(default=30, gt=0)
-    min_delta: float = Field(default=0.0, ge=0.0)
-    metric: str = Field(default="loss")
+    patience: int = Field(default=30, gt=0, description="Number of epochs with no improvement after which training will be stopped")
+    min_delta: float = Field(default=0.0, ge=0.0, description="Minimum change to qualify as an improvement")
+    metric: Union[MetricType, LossType] = Field(default=LossType.MSE, description="Metric to monitor for early stopping")
     mode: Literal["min", "max"] = Field(default="min")
 
 class BackupManagerSchema(BaseModel):
-    backup_interval: int = Field(default=10, gt=0)
-    backup_path: str = Field(default="./model_backups")
-    metric: str = Field(default="loss")
-    mode : Literal["min", "max"] = Field(default="min")
+    backup_interval: int = Field(default=10, gt=0, description="Interval (in epochs) to save model backups")
+    backup_path: str = Field(default="./model_backups", description="Path to save model backups")
+    metric: Union[MetricType, LossType] = Field(default=LossType.MSE, description="Metric to monitor for backup")
+    mode: Literal["min", "max"] = Field(default="min", description="Mode for monitoring metric")
 
 class ReduceLROnPlateauSchema(BaseModel):
-    mode: Literal["min", "max"] = Field(default="min")
-    patience: int = Field(default=20, gt=0)
-    factor: float = Field(default=0.1, gt=0.0, lt=1.0)
+    mode: Literal["min", "max"] = Field(default="min", description="Mode for monitoring metric")
+    patience: int = Field(default=20, gt=0, description="Number of epochs with no improvement after which learning rate will be reduced")
+    factor: float = Field(default=0.1, gt=0.0, lt=1.0, description="Factor by which the learning rate will be reduced")
 
 class GradientLoggerSchema(BaseModel):
-    interval: Optional[int] = Field(default=None, gt=0)
+    interval: Optional[int] = Field(default=None, gt=0, description="Interval (in epochs) to log gradient norms. If None, logging is disabled.")
 
-# TODO Add model validation between TorchLoss+TorchMetric keys to match helpers metrics chosen 
 # TODO Add Model output keys validation maybe?
 class Helpers(BaseModel):
     history_plot: Optional[HistoryPlotSchema] = Field(default_factory=HistoryPlotSchema)
@@ -189,13 +190,12 @@ class Helpers(BaseModel):
     gradient_logger: Optional[GradientLoggerSchema] = Field(default_factory=GradientLoggerSchema)
 
 class GradientControl(BaseModel):
-    grad_clip: Optional[float] = Field(default=1.0, gt=0.0)
-    use_amp: bool = Field(default=False)
-    grad_logging_interval: Optional[int] = Field(default=None, gt=0)
+    grad_clip: Optional[float] = Field(default=1.0, gt=0.0, description="Maximum gradient norm for clipping. If None, no clipping is applied.")
+    use_amp: bool = Field(default=False, description="Whether to use Automatic Mixed Precision (AMP) for training.")
 
 class Info(BaseModel):
-    metrics: List[MetricType] = Field(default_factory=list)
-    metrics_args: Optional[List[dict]] = Field(default=None)
+    metrics: List[MetricType] = Field(default_factory=list, description="List of metrics to compute during training and validation")
+    metrics_args: Optional[List[dict]] = Field(default=None, description="List of dicts with args to instantiate each metric")
     @property
     def get_metric_classes(self):
         """Returns list of actual metric classes"""
@@ -206,9 +206,14 @@ class ModelConfig(BaseModel):
     model_kwargs: dict = Field(default_factory=dict, description="Kwargs to instantiate model")
 
 class LossConfig(BaseModel):
-    loss_type: LossType = Field(default=LossType.MSE)
-    loss_kwargs: dict = Field(default_factory=dict)
+    loss_type: LossType = Field(default=LossType.MSE, description="Type of loss function to use")
+    loss_kwargs: dict = Field(default_factory=dict, description="Kwargs to instantiate loss function")
 
+class SanityCheckConfig(BaseModel):
+    set_sizes: SetSizes = Field(default_factory=SetSizes)
+    epochs: int = Field(default=5, gt=0, description="Number of epochs to run sanity check")
+    enabled: bool = Field(default=False, description="Whether to enable sanity check")
+    
 class TrainerConfig(BaseModel):
     """
     Main training configuration. 
@@ -225,6 +230,8 @@ class TrainerConfig(BaseModel):
     device: str = Field(
         default_factory=lambda: "cuda" if cuda.is_available() else "cpu"
     )
+    sanity_check: Optional[SanityCheckConfig] = Field(default_factory=SanityCheckConfig)
+
 
     @property
     def get_loss_class(self):
@@ -241,6 +248,16 @@ class TrainerConfig(BaseModel):
         """Returns the actual model class"""
         return MODEL_MAP[self.model.model_type]
     
+
+    @model_validator(mode='after')
+    def validate_helpers_monitored_metrics(self):
+        #Check if monitored helpers metrics actually exist in info metrics
+        for helper in self.helpers:
+            if hasattr(helper, 'metric'):
+                if helper not in self.info.metrics:
+                    print(helper)
+                    raise ValueError(f"[{helper}] monitored metric {self.helpers[helper].metric} not found in info.metrics")
+        return self
 # ===== Usage Functions =====
 
 def save_config(config: TrainerConfig, path: str):
@@ -255,5 +272,4 @@ def load_config(path: str) -> TrainerConfig:
     with open(path, 'r') as f:
         config_dict = json.load(f)
     return TrainerConfig(**config_dict)
-    
     

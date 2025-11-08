@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from typing import Dict, Union, Tuple, Any, List
 from abc import abstractmethod
+
 class TorchWrapper(nn.Module):
     def __init__(self):
         super().__init__()

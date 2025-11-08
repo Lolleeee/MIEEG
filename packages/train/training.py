@@ -9,9 +9,8 @@ from packages.train.metrics import TorchMetric
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from typing import Callable, Dict, List
 from torch.amp.grad_scaler import GradScaler
-from packages.train.trainer_config_schema import TrainerConfig
+from packages.train.trainer_config_schema import SanityCheckConfig, TrainerConfig
 from packages.io.torch_dataloaders import get_data_loaders
-
 logging.basicConfig(
     level=logging.INFO,
     format='[%(levelname)s] %(message)s',
@@ -32,8 +31,7 @@ class MetricsHandler:
         self._initialize_metrics_eval_dict()
 
         self.epoch_samples_count: int = 0
-        self.current_epoch: int = 0
-        self._new_epoch_setup()
+        self._new_epoch_setup(current_epoch=0)
 
         self.loss_eval: torch.Tensor = None
 
@@ -53,29 +51,34 @@ class MetricsHandler:
 
         # Accumulate loss into metrics dict
         for loss_comp_name, value in batch_loss_eval_dict.items():
-            if isinstance(value, torch.Tensor) and value.device != torch.device('cpu'):
+            if isinstance(value, torch.Tensor):
                 value = value.detach().cpu()
             self.metrics_eval[loss_comp_name] += value * batch.size(0)
 
         # Accumulate metrics
         for metric_name, metric in self.metrics.items():
-            value = metric(outputs, batch)
+            value = metric(outputs, batch).detach().cpu()
             self.metrics_eval[metric_name] += value * batch.size(0)
-
+        
         return loss_eval
 
     def _end_epoch_step(self):
         assert self.epoch_samples_count > 0, "No samples were processed in this epoch."
         assert all(value >= 0 for value in self.metrics_eval.values()), "One or more metric evaluations are negative, which is invalid."
-
         # Scaling metrics by number of samples
-        self.metrics_eval['epoch'] = self.current_epoch
         self.metrics_eval = self.scale_loss_dict(self.metrics_eval, 1.0 / self.epoch_samples_count)
+
         
-    def _new_epoch_setup(self):
-        self.current_epoch += 1
-        self.epoch_samples_count = 0
-        self.metrics_eval = {metric_name: 0.0 for metric_name in self.metrics_eval.keys()}
+    def _new_epoch_setup(self, current_epoch: int = None):
+        assert current_epoch is not None, "Current epoch must be provided for new epoch setup."
+
+        if current_epoch != self.metrics_eval['epoch']:
+            self.epoch_samples_count = 0
+            for metrics_name in self.metrics_eval:
+                if metrics_name == "epoch":
+                    self.metrics_eval[metrics_name] = current_epoch
+                else:
+                    self.metrics_eval[metrics_name] = 0.0
 
     def _initialize_metrics_eval_dict(self):
         self.metrics_eval['epoch'] = 0
@@ -113,10 +116,12 @@ class Trainer():
         self._config_unpacking()
 
         self._classes_init()
-
+        
         self._data_loaders_init()
 
         self._pretrain_setup()
+        
+        self._components_runtime_validation_setup()
 
     def _config_unpacking(self):
         self.model = self.config.get_model_class
@@ -138,7 +143,6 @@ class Trainer():
         self.device = self.config.get_device
         assert isinstance(self.device, torch.device)
 
-        
     def _classes_init(self):
 
         # Init model
@@ -158,6 +162,7 @@ class Trainer():
         self.dataset = self.dataset(**self.config.dataset.dataset_args)
         assert isinstance(self.dataset, torch.utils.data.Dataset)
 
+        
     def _optimizer_init(self):
         assert isinstance(self.optimizer, type) and issubclass(self.optimizer, torch.optim.Optimizer)
         if self.config.optimizer.asym_lr is not None:
@@ -185,6 +190,16 @@ class Trainer():
             norm_axes=self.config.dataset.data_loader.norm_axes,
         )
 
+
+    def _call_sanity_checker(self):
+        if self.config.sanity_check is not None and self.config.sanity_check.enabled:
+            logging.info("Initializing Sanity Checker...")
+            from packages.train.sanity_check import run_sanity_check
+            
+            outcome = run_sanity_check(self.config)
+            if not outcome:
+                raise RuntimeError("Sanity check failed. Aborting training.")
+            
     def _pretrain_setup(self):
         """
         Function which executes all the thing that should happen before starting any loop
@@ -199,6 +214,9 @@ class Trainer():
         self.metrics_handler = MetricsHandler(self.loss_criterion, self.metrics)
 
         self.helper_handler = HelperHandler(self)
+
+        self._call_sanity_checker()
+
 
     def start(self):
 
@@ -215,9 +233,11 @@ class Trainer():
 
         self.use_amp = self.config.gradient_control.use_amp
         self.grad_clip = self.config.gradient_control.grad_clip
+        self.epochs = self.config.train_loop.epochs
+        with tqdm(desc="Epochs", total=self.epochs, position=1, leave=True) as Epochpbar:
+            for epoch in range(self.epochs):
 
-        with tqdm(desc="Epochs", total=self.config.train_loop.epochs, position=1, leave=True) as Epochpbar:
-            for epoch in range(self.config.train_loop.epochs):
+                self.metrics_handler._new_epoch_setup(epoch)
 
                 self.model.train()
 
@@ -225,9 +245,16 @@ class Trainer():
 
                 self.helper_handler._call_end_train_epoch_step(epoch_metrics)
 
+                self.metrics_handler._end_epoch_step()
+
+                self.metrics_handler._new_epoch_setup(epoch)
+
                 val_metrics = self._start_val_loop()
 
                 self.helper_handler._call_end_val_step(val_metrics)
+                
+                self.metrics_handler._end_epoch_step()
+            
 
                 if 'early_stopping' in self.helper_handler.helpers and self.helper_handler.helpers['early_stopping'].stop_early:
                     logging.info("Early stopping triggered. Ending training loop.")
@@ -237,7 +264,6 @@ class Trainer():
                 Epochpbar.set_postfix({'Epoch Loss': val_metrics.get('loss', "No loss found")})
 
     def _train_epoch(self):
-        self.metrics_handler._new_epoch_setup()
         
         self.scaler = GradScaler(enabled=self.use_amp)
 
@@ -261,17 +287,13 @@ class Trainer():
 
                 Batchpbar.update()
                 Batchpbar.set_postfix({'Batch Loss': batch_loss_eval.item()})
-                
-            self.metrics_handler._end_epoch_step()
 
             epoch_metrics = self.metrics_handler.metrics_eval
 
             return epoch_metrics
         
     def _start_val_loop(self):
-        #TRACKED AND SCHEDULERS UPDATE ABOUT VALIDATION
-        self.metrics_handler._new_epoch_setup()
-
+    
         self.model.eval()
 
         with torch.no_grad():
@@ -288,7 +310,7 @@ class Trainer():
     
     def _start_test_eval(self):
 
-        self.metrics_handler._new_epoch_setup()
+        self.metrics_handler._new_epoch_setup(current_epoch=0)
 
         self.model.eval()
 
@@ -301,7 +323,41 @@ class Trainer():
 
         test_metrics = self.metrics_handler.metrics_eval
         for metric_name, metric_value in test_metrics.items():
-            logging.info(f"Test {metric_name}: {metric_value:.4f}")
+            if metric_name != "epoch":
+                logging.info(f"Test {metric_name}: {metric_value:.4f}")
         
+        self.metrics_handler._end_epoch_step()
+    
+    def _components_runtime_validation_setup(self):
+        """
+        Setup components for runtime validation if enabled in config.
+        """
+
+        self._validation_components_list: List[Callable] = []
+
+        self._validation_components_list.append(self.loss_criterion)
+
+        for metric in self.metrics:
+            self._validation_components_list.append(metric)
+        
+        assert all(hasattr(component, 'enable_validation') and callable(getattr(component, 'enable_validation')) for component in self._validation_components_list), "All components must have an 'enable_validation' method."
+        
+
+    def turn_on_runtime_validation(self):
+        """
+        Turn on validation in all relevant components.
+        """
+
+        for component in self._validation_components_list:
+            component.enable_validation()
+        
+
+    def turn_off_runtime_validation(self):
+        """
+        Turn off validation in all relevant components.
+        """
+        for component in self._validation_components_list:
+            component.disable_validation()
+
 
 

@@ -90,7 +90,7 @@ class EarlyStopping(Helper):
         self.stop_early = False
 
     def _end_val_step(self, **kwargs):
-        metric = kwargs[self.metric]
+        metric = kwargs[self.metric.name]
         if (self.mode == 'min' and metric < self.best_metric - self.min_delta) or (self.mode == 'max' and metric > self.best_metric + self.min_delta):
             self.best_metric = metric
             self.counter = 0
@@ -140,8 +140,8 @@ class History(Helper):
     def _log_history(curr_history: Dict[str, List[float]], metrics: Dict[str, float]):
         log_string = ""
         for metric_name, metric_value in metrics.items():
-            curr_history[metric_name].append(metric_value)
-            log_string += f", {metric_name}: {metric_value:.4f}"
+            curr_history[metric_name].append(metric_value)  # Debug print
+            log_string += f"--- {metric_name}: {metric_value:.4f}"
 
         return curr_history, log_string
 
