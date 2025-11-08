@@ -190,6 +190,20 @@ class Trainer():
             norm_axes=self.config.dataset.data_loader.norm_axes,
         )
 
+    def _components_runtime_validation_setup(self):
+        """
+        Setup components for runtime validation if enabled in config.
+        """
+
+        self._validation_components_list: List[Callable] = []
+
+        self._validation_components_list.append(self.loss_criterion)
+
+        for metric in self.metrics:
+            self._validation_components_list.append(metric)
+        
+        assert all(hasattr(component, 'enable_validation') and callable(getattr(component, 'enable_validation')) for component in self._validation_components_list), "All components must have an 'enable_validation' method."
+        
 
     def _call_sanity_checker(self):
         if self.config.sanity_check is not None and self.config.sanity_check.enabled:
@@ -215,10 +229,11 @@ class Trainer():
 
         self.helper_handler = HelperHandler(self)
 
-        self._call_sanity_checker()
+        
 
 
     def start(self):
+        self._call_sanity_checker()
 
         self._start_train_loop()
 
@@ -328,21 +343,6 @@ class Trainer():
         
         self.metrics_handler._end_epoch_step()
     
-    def _components_runtime_validation_setup(self):
-        """
-        Setup components for runtime validation if enabled in config.
-        """
-
-        self._validation_components_list: List[Callable] = []
-
-        self._validation_components_list.append(self.loss_criterion)
-
-        for metric in self.metrics:
-            self._validation_components_list.append(metric)
-        
-        assert all(hasattr(component, 'enable_validation') and callable(getattr(component, 'enable_validation')) for component in self._validation_components_list), "All components must have an 'enable_validation' method."
-        
-
     def turn_on_runtime_validation(self):
         """
         Turn on validation in all relevant components.
