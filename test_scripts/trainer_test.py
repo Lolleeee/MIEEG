@@ -13,18 +13,25 @@ from packages.train.training import Trainer
 
 config = config = {
     'model': {
-        'model_type': ModelType.SIMPLE_VQVAE,
+        'model_type': ModelType.SEQUENCE_VQAE_SKIP,
         'model_kwargs': {
-            'in_channels': 10,
-            'embedding_dim': 16,
-            'num_embeddings': 64
+            'chunk_shape': (25, 7, 5, 25),  # (C, H, W, T) per chunk
+            'embedding_dim': 128,
+            'codebook_size': 512,
+            'num_downsample_stages': 3,
+            'use_quantizer': False,
+            'use_skip_connections': False,
+            'skip_strength': 1.0,  
+            'skip_strengths': None, 
+            'skip_mode': 'concat',  
+            'commitment_cost': 0.25,
+            'decay': 0.99
         }
     },
     'dataset': {
-        'dataset_type': DatasetType.TEST_TORCH_DATASET,
+        'dataset_type': DatasetType.TORCH_DATASET,
         'dataset_args': {
-            'nsamples': 48,
-            'shape': (10,)
+            'root_folder': 'scripts/test_output',
         },
         'data_loader': {
             'set_sizes': {
@@ -37,7 +44,7 @@ config = config = {
         }
     },
     'loss': {
-        'loss_type': LossType.MSE,
+        'loss_type': LossType.SEQVQVAELOSS,
         'loss_kwargs': {}
     },
     'optimizer': {
@@ -82,7 +89,8 @@ config = config = {
         },
         'epochs': 5,
         'enabled': True
-    }
+    },
+    'seed': 42
 }
 
 

@@ -15,7 +15,8 @@ logging.basicConfig(level=logging.INFO)
 class TorchMSELoss(TorchLoss):
     def __init__(self):
         """MSE Loss with automatic validation"""
-        super().__init__(expected_model_output_keys=['reconstruction'], expected_loss_keys=['loss'])
+        super().__init__(expected_model_output_keys=['reconstruction'], 
+                         expected_loss_keys=['loss'])
         
     def _compute_loss(self, outputs: Dict, inputs: torch.Tensor) -> torch.Tensor:
         rec = outputs['reconstruction']
@@ -25,7 +26,8 @@ class TorchL1Loss(TorchLoss):
     """L1 Loss with optional embedding regularization"""
     
     def __init__(self, emb_loss=0, scale=1.0):
-        super().__init__(expected_model_output_keys=['reconstruction', 'embeddings'], expected_loss_keys=['loss'])
+        super().__init__(expected_model_output_keys=['reconstruction', 'embeddings'], 
+        expected_loss_keys=['loss'])
         self.emb_loss = emb_loss
         self.scale = scale
     
@@ -42,11 +44,9 @@ class TorchL1Loss(TorchLoss):
             L1_norm = torch.mean(torch.abs(embedding))
             loss += self.emb_loss * L1_norm
         
-        return loss * self.scale
+        return {'loss': loss * self.scale}
 
 
-
-# TODO to be updated to new TORCH standard and tested
 class SequenceVQVAELoss(TorchLoss):
     """
     Loss function for SequenceProcessor with bottleneck regularization.
@@ -60,7 +60,8 @@ class SequenceVQVAELoss(TorchLoss):
         bottleneck_cov_weight=0.5,      # NEW: Force decorrelation
         min_variance=0.1                # NEW: Minimum per-dimension variance
     ):
-        super().__init__()
+        super().__init__(expected_model_output_keys=['reconstruction', 'embeddings', 'vq_loss'], 
+                         expected_loss_keys=['loss', 'recon_loss', 'vq_loss', 'bottleneck_loss', 'bottleneck_var_loss', 'bottleneck_cov_loss'])
         self.name = "SequenceVQVAELoss"
         self.recon_loss_type = recon_loss_type
         self.recon_weight = recon_weight
@@ -127,7 +128,7 @@ class SequenceVQVAELoss(TorchLoss):
         
         return decorr_loss
 
-    def forward(self, outputs, chunks):
+    def _compute_loss(self, outputs, chunks):
         """
         Compute total loss for sequence.
         
@@ -140,8 +141,9 @@ class SequenceVQVAELoss(TorchLoss):
             loss: Total loss (scalar)
             loss_dict: Dictionary of individual loss components
         """
-        chunks_recon, vq_loss, _, embeddings = outputs
-        
+        chunks_recon = outputs['reconstruction']
+        embeddings = outputs['embeddings']
+        vq_loss = outputs['vq_loss']
         # Reconstruction loss
         if self.recon_loss_type == 'mse':
             recon_loss = F.mse_loss(chunks_recon, chunks)
@@ -178,42 +180,4 @@ class SequenceVQVAELoss(TorchLoss):
             bottleneck_loss
         )
         
-        # Return detailed loss breakdown for monitoring
-        self.last_losses = {
-            'total': total_loss.item(),
-            'recon': recon_loss.item(),
-            'vq': vq_loss.item() if isinstance(vq_loss, torch.Tensor) else vq_loss,
-            'bottleneck': bottleneck_loss.item() if isinstance(bottleneck_loss, torch.Tensor) else 0        ,
-            'bottleneck_var': var_loss.item() if embeddings is not None else 0,
-            'bottleneck_cov': decorr_loss.item() if embeddings is not None else 0
-        }
-        
-        return total_loss
-    
-    """Feature-based loss that provides stronger encoder gradients."""
-    def __init__(self, model, feature_weight=0.5, pixel_weight=0.5):
-        super().__init__()
-        self.model = model
-        self.feature_weight = feature_weight
-        self.pixel_weight = pixel_weight
-
-    def forward(self, model_output, target):
-        if isinstance(model_output, tuple):
-            reconstruction, rec_features = model_output
-        else:
-            reconstruction = model_output
-            rec_features = self.model.encode(reconstruction)
-
-        # Compute target features (no gradient)
-        with torch.no_grad():
-            target_features = self.model.encode(target)
-
-        # Compute feature and pixel losses
-        feature_loss = F.mse_loss(rec_features, target_features)
-        pixel_loss = F.mse_loss(reconstruction, target)
-
-        total_loss = (
-            self.feature_weight * feature_loss +
-            self.pixel_weight * pixel_loss
-        )
-        return total_loss
+        return {'loss': total_loss, 'recon_loss': recon_loss, 'vq_loss': vq_loss, 'bottleneck_loss': bottleneck_loss, 'bottleneck_var_loss': var_loss, 'bottleneck_cov_loss': decorr_loss}

@@ -1,7 +1,7 @@
 import logging
 import torch
 from typing import Dict, TYPE_CHECKING, Tuple
-from packages.train.trainer_config_schema import PlotType, SanityCheckConfig, TrainerConfig
+from packages.train.trainer_config_schema import PlotType, SanityCheckConfig, TrainerConfig, DatasetType
 
 from packages.train.training import Trainer
 
@@ -10,7 +10,8 @@ logging.basicConfig(
     format='[%(levelname)s] %(message)s',
     force=True
 )
-
+#TODO actually check that with a non random dataset the model overfits the training set lowering the loss
+#TODO setup the test loader class in the config building, maybe also a option to decide the dataset class for sanity check
 class SanityChecker(Trainer):
     """
     A sanity checker that runs a quick training session with a subset of data
@@ -59,9 +60,10 @@ class SanityChecker(Trainer):
             Modified configuration dict for sanity checking
         """
         sanity_checked_trainer_config = self.trainer_config.model_dump()
+        # Remove sanity check config to avoid recursion
         sanity_checked_trainer_config['sanity_check'] = None
+        # Set epochs and data splits
         sanity_checked_trainer_config['train_loop']['epochs'] = self.sanity_config['epochs']
-        
         sanity_checked_trainer_config['dataset']['data_loader']['set_sizes'] = self.sanity_config['set_sizes']
 
         # Remove all helpers like early stopping and such to avoid interference
@@ -72,8 +74,26 @@ class SanityChecker(Trainer):
             else:
                 sanity_checked_trainer_config["helpers"][helper] = None
 
+        # Remove all metrics to avoid interference
+        sanity_checked_trainer_config["info"]["metrics"] = []
+        sanity_checked_trainer_config["info"]["metrics_args"] = None
+
+        # Remove all other non-essential configs that may interfere
+        sanity_checked_trainer_config['gradient_control']['grad_clip'] = None
+        sanity_checked_trainer_config['optimizer']['weight_decay'] = 0.0
+        sanity_checked_trainer_config['optimizer']['asym_lr'] = None
+        sanity_checked_trainer_config['gradient_control']['use_amp'] = False
+
+        # Set the dataset to a TestTorchDataset to subsample
+        sanity_checked_trainer_config['dataset']['dataset_type'] = DatasetType.TEST_TORCH_DATASET
+        sanity_checked_trainer_config['dataset']['dataset_args']['nsamples'] = self.sanity_config['nsamples']
+        sanity_checked_trainer_config['dataset']['dataset_args']['shape'] = self.sanity_config['shape']
+        sanity_checked_trainer_config['dataset']['dataset_args']['root_folder'] = self.trainer_config.dataset.dataset_args.get('root_folder', None) 
+
+        # Create a version with only a single epoch for initial validation check
         single_epoch_sanity_checked_trainer_config = sanity_checked_trainer_config.copy()
         single_epoch_sanity_checked_trainer_config['train_loop']['epochs'] = 1
+        
         assert isinstance(single_epoch_sanity_checked_trainer_config, Dict) and isinstance(sanity_checked_trainer_config, Dict)
         sanity_checked_trainer_config = TrainerConfig(**sanity_checked_trainer_config)
         single_epoch_sanity_checked_trainer_config = TrainerConfig(**single_epoch_sanity_checked_trainer_config)

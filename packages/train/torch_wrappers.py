@@ -224,6 +224,7 @@ class TorchLoss(TorchWrapper):
         Returns:
             loss: Validated loss
         """
+
         if not isinstance(loss, Dict):
             raise TypeError(f"Loss output must be a dict, got {type(loss)}")
         if 'loss' not in loss:

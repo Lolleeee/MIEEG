@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 
 from packages.models.vqae import SequenceProcessor, VQVAE
 from packages.models.vqae_skip import SkipConnectionScheduler
-from packages.models.vqae_skip import VQVAE as VQVAESkip
+from packages.models.vqae_skip import VQAE as VQVAESkip
 from packages.train.loss import VQVAELoss, SequenceVQVAELoss
 
 model = SequenceProcessor(chunk_shape=(25, 7, 5, 32), embedding_dim=64, codebook_size=1024, use_quantizer=False)

@@ -1,7 +1,7 @@
 import torch
 from packages.data_objects.dataset import TorchDataset
 from packages.io.torch_dataloaders import get_data_loaders
-from packages.models.vqae_skip import VQVAE as VQVAESkip
+from packages.models.vqae_skip import VQAE as VQVAESkip
 from packages.models.vqae import SequenceProcessor
 import numpy as np
 import sys

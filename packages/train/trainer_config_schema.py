@@ -4,8 +4,8 @@ from torch import nn, optim, cuda
 from torch import device as torchdevice
 from typing import Optional, Literal, List, Any, Union
 from packages.train.metrics import TorchMetric, RMSE, MSE, MAE, AxisCorrelation
-from packages.train.loss import TorchLoss, TorchMSELoss, TorchL1Loss
-from packages.models.vqae_skip import VQVAE as VQVAE_Skip
+from packages.train.loss import TorchLoss, TorchMSELoss, TorchL1Loss, SequenceVQVAELoss
+from packages.models.vqae_skip import SequenceVQAE as SequenceVQAE_Skip
 from packages.models.vqae import VQVAE
 from packages.models.test_models import SimpleVQVAE, SimpleAutoencoder
 from packages.data_objects.dataset import TorchDataset, TestTorchDataset
@@ -18,7 +18,7 @@ import json
 # ===== String-based Enums =====
 
 class ModelType(str, Enum):
-    VQVAESKIP = "vqvae_skip"
+    SEQUENCE_VQAE_SKIP = "sequence_vqae_skip"
     VQVAE = "vqvae"
     #Test models
     SIMPLE_VQVAE = "simple_vqvae"
@@ -32,6 +32,7 @@ class OptimizerType(str, Enum):
 class LossType(str, Enum):
     MSE = "mse"
     L1 = "l1"
+    SEQVQVAELOSS = "seq_vqvae_loss"
 
 
 
@@ -57,7 +58,7 @@ class MetricType(str, Enum):
 
 MODEL_MAP = {
     ModelType.VQVAE: VQVAE,
-    ModelType.VQVAESKIP: VQVAE_Skip,
+    ModelType.SEQUENCE_VQAE_SKIP: SequenceVQAE_Skip,
     ModelType.SIMPLE_VQVAE: SimpleVQVAE,
     ModelType.SIMPLE_AE: SimpleAutoencoder,
 }
@@ -70,6 +71,7 @@ OPTIMIZER_MAP = {
 LOSS_MAP = {
     LossType.MSE: TorchMSELoss,
     LossType.L1: TorchL1Loss,
+    LossType.SEQVQVAELOSS: SequenceVQVAELoss,
 }
 
 DATASET_MAP = {
@@ -213,6 +215,8 @@ class SanityCheckConfig(BaseModel):
     set_sizes: SetSizes = Field(default_factory=SetSizes)
     epochs: int = Field(default=5, gt=0, description="Number of epochs to run sanity check")
     enabled: bool = Field(default=False, description="Whether to enable sanity check")
+    nsamples: int = Field(default=10, gt=0, description="Number of samples to use in TestTorchDataset for sanity check")
+    shape: tuple = Field(default=(25, 7, 5, 250), description="Shape of samples in TestTorchDataset for sanity check")
     
 class TrainerConfig(BaseModel):
     """
@@ -231,6 +235,7 @@ class TrainerConfig(BaseModel):
         default_factory=lambda: "cuda" if cuda.is_available() else "cpu"
     )
     sanity_check: Optional[SanityCheckConfig] = Field(default_factory=SanityCheckConfig)
+    seed: Optional[int] = Field(default=None, description="Random seed for reproducibility. If None, no seed is set.")
 
 
     @property

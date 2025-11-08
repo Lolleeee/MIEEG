@@ -301,7 +301,7 @@ class ProgressiveDecoderBlock(nn.Module):
 
 
 
-class VQVAE(nn.Module):
+class VQAE(nn.Module):
     """
     VQ-VAE with controllable skip connections.
     
@@ -568,8 +568,8 @@ class VQVAE(nn.Module):
             z_q, vq_loss, indices = self.vq(z)
             print(f"unique indices {indices.unique()}")
         else:
-            z_q, vq_loss, indices = z, torch.tensor(0., device=z.device), None
-        
+            z_q, vq_loss, indices = z, torch.tensor(0., device=z.device), torch.tensor(0., device=z.device)
+
         return z_q, vq_loss, indices
     
     def decode(self, z_q):
@@ -605,6 +605,110 @@ class VQVAE(nn.Module):
         if hasattr(self, '_encoder_features'):
             del self._encoder_features
         return x_recon, vq_loss, indices
+
+class SequenceVQAE(nn.Module):
+    """
+    Process full EEG window as sequence of chunks.
+    Handles arbitrary chunk configurations.
+    
+    Example usage for (25, 7, 5, 250) -> (10, 25, 7, 5, 25):
+        - Original: 25 channels, 7x5 spatial, 250 time samples
+        - Chunked: 10 chunks, 25 channels each, 7x5 spatial, 25 samples per chunk
+    """
+    def __init__(
+        self,
+        chunk_shape=(25, 7, 5, 32),  # (C, H, W, T) per chunk
+        embedding_dim=128,
+        codebook_size=512,
+        num_downsample_stages=3,
+        use_quantizer=True,
+        use_skip_connections=False,
+        skip_strength=1.0,  # Global skip strength (0.0 to 1.0)
+        skip_strengths=None,  # Per-layer skip strengths (list of floats)
+        skip_mode='concat',  # 'concat', 'add', or 'weighted_add'
+        commitment_cost=0.25, 
+        decay=0.99
+    ):
+        super().__init__()
+        
+        self.chunk_shape = chunk_shape
+        self.embedding_dim = embedding_dim
+        self.use_quantizer = use_quantizer
+        self.num_chunks = None
+        self.batch_size = None
+        self.input_shape = None
+
+        # Create chunk autoencoder
+        self.chunk_ae = VQAE(
+            in_channels=chunk_shape[0],
+            input_spatial=chunk_shape[1:],  #(H, W, T)
+            embedding_dim=embedding_dim,
+            codebook_size=codebook_size,
+            num_downsample_stages=num_downsample_stages,
+            use_quantizer=use_quantizer,
+            use_skip_connections=use_skip_connections,
+            skip_strength=skip_strength,
+            skip_strengths=skip_strengths,
+            skip_mode=skip_mode,
+            commitment_cost=commitment_cost, 
+            decay=decay
+        )
+        
+    def shapes_init(self, chunks):
+        """Initialize shapes based on chunk configuration."""
+        self.num_chunks = chunks.shape[-1] // self.chunk_shape[-1]
+        self.input_shape = chunks.shape[1:]
+
+    def encode_sequence(self, chunks):
+        """
+        Encode sequence of chunks.
+        Input: (B, C, H, W, T)
+        Output: (B, num_chunks, embedding_dim), vq_loss, indices
+        """
+        if self.num_chunks is None or self.input_shape is None: self.shapes_init(chunks)
+
+        self.batch_size = chunks.shape[0]
+
+        # Reshape to process all chunks
+        chunks_flat = chunks.view(-1, *self.chunk_shape)
+
+        # Encode each chunk
+        embeddings, vq_loss, indices = self.chunk_ae.encode(chunks_flat)
+
+        # Reshape back to sequence
+        embeddings = embeddings.view(self.batch_size*self.num_chunks, self.embedding_dim)
+        
+        return embeddings, vq_loss, indices
+    
+    def decode_sequence(self, embeddings):
+        """
+        Decode sequence of embeddings back to chunks.
+        Input: (B*num_chunks, embedding_dim)
+        Output: (B, C, H, W, T)
+        """
+        
+        # Reshape to decode all chunks
+        embeddings_flat = embeddings.view(-1, self.embedding_dim)
+        
+        # Decode each chunk
+        chunks_recon = self.chunk_ae.decode(embeddings_flat)
+        
+        # Reshape back to sequence
+        chunks_recon = chunks_recon.view(self.batch_size, *self.input_shape)
+
+        return chunks_recon
+    
+    def forward(self, chunks):
+        """
+        Full forward pass.
+        Input: (B, num_chunks, C, H, W, T)
+        Output: (reconstruction, vq_loss, indices)
+        """
+        embeddings, vq_loss, indices = self.encode_sequence(chunks)
+        chunks_recon = self.decode_sequence(embeddings)
+
+        return {'reconstruction': chunks_recon, 'vq_loss': vq_loss, 'embeddings': embeddings, 'indices': indices}
+
 
 
 class SkipConnectionScheduler:

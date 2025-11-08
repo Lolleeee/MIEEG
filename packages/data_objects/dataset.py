@@ -154,11 +154,9 @@ class TorchDataset(Dataset, BasicDataset):
         self,
         root_folder: str,
         unpack_func: Union[Callable[[Any], Any], str] = None,
-        chunk_size: int = None
     ):
         BasicDataset.__init__(self, root_folder, unpack_func)
         self._norm_params = None
-        self.chunk_size = chunk_size
 
     def __getitem__(self, idx):
         data = BasicDataset.__getitem__(self, idx)
@@ -167,9 +165,6 @@ class TorchDataset(Dataset, BasicDataset):
 
         if self._norm_params is not None:
             data = self._normalize_item(data)
-
-        if self.chunk_size is not None:
-            data = self._get_chunks(data)
         
 
         return data.float()
@@ -183,23 +178,7 @@ class TorchDataset(Dataset, BasicDataset):
             return item
         except Exception as e:
             raise ValueError(f"Error normalizing data: {e}")
-        
-    def _get_chunks(self, data):
-        if data.shape[-1] < self.chunk_size:
-                raise ValueError(f"Data length {data.shape[-1]} is smaller than chunk size {self.chunk_size}.")
-        
-        n_chunks = data.shape[-1] // self.chunk_size
-        total_len = n_chunks * self.chunk_size
-        if n_chunks == 0:
-            raise ValueError(f"Data length {data.shape[-1]} is smaller than chunk size {self.chunk_size}.")
 
-        cropped = data[..., :total_len].squeeze(0)
-
-        k = cropped.dim()  # original number of dims of cropped
-        reshaped = cropped.reshape(*cropped.shape[:-1], n_chunks, self.chunk_size)
-        
-        data = reshaped.permute(k - 1, *range(0, k - 1), k)
-        return data
 
 class TestTorchDataset(TorchDataset):
     __test__ = False  # prevent pytest from collecting this class as a test case
@@ -209,15 +188,13 @@ class TestTorchDataset(TorchDataset):
         unpack_func: Union[Callable[[Any], Any], str] = general_unpack_func,
         nsamples: int = 10,
         shape: tuple = (25, 7, 5, 250),
-        chunk_size: int = None
     ):  
         self._norm_params = None
-        self.chunk_size = chunk_size
         self.nsamples = nsamples
         self.shape = shape
 
         if root_folder is not None:
-            super().__init__(root_folder, unpack_func, chunk_size)
+            super().__init__(root_folder, unpack_func)
         else: 
             self.item_list = self._get_random_item_list()
         
@@ -243,9 +220,6 @@ class TestTorchDataset(TorchDataset):
             
             if self._norm_params is not None:
                 data = self._normalize_item(data)
-            
-            if self.chunk_size is not None:
-                data = self._get_chunks(data)
             
             return data.float()
         else:

@@ -11,6 +11,7 @@ from typing import Callable, Dict, List
 from torch.amp.grad_scaler import GradScaler
 from packages.train.trainer_config_schema import SanityCheckConfig, TrainerConfig
 from packages.io.torch_dataloaders import get_data_loaders
+from packages.train.seed import _set_seed
 logging.basicConfig(
     level=logging.INFO,
     format='[%(levelname)s] %(message)s',
@@ -115,6 +116,8 @@ class Trainer():
 
         self._config_unpacking()
 
+        _set_seed(self.config)
+        
         self._classes_init()
         
         self._data_loaders_init()
