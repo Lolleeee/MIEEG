@@ -9,7 +9,7 @@ from packages.data_objects.dataset import (
     FileDataset,
     TorchDataset,
     TestTorchDataset,
-    general_unpack_func,
+    default_unpack_func,
     _filetype_loader
 )
 
@@ -60,7 +60,7 @@ class TestUtilityFunctions:
 
     def test_general_unpack_func(self):
         test_dict = {"data": np.array([1, 2, 3])}
-        result = general_unpack_func(test_dict)
+        result = default_unpack_func(test_dict)
         assert result == test_dict
 
 

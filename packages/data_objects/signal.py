@@ -110,7 +110,7 @@ class SignalObject:
                 )
         self._edit_dim_dict(new_dim_dict)
 
-    def _reorder_signal_dimensions(self, new_order: List[str]):
+    def reorder_signal_dimensions(self, new_order: List[str]):
         """
         Reorder signal dimensions to match the specified dimension names order.
         Only the specified dimensions are reordered, others remain in their current relative positions.

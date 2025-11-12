@@ -1,9 +1,6 @@
 from typing import List
-from packages.io.torch_dataloaders import FileLoader
 import napari
 import numpy as np
-
-from packages.data_objects.signal import GLOBAL_DIM_KEYS, EegSignal
 
 
 def raw_plot_spatial_eeg_tensor(eeg_tensor: np.ndarray) -> None:
@@ -65,3 +62,10 @@ def raw_plot_spatial_eeg_tensor(eeg_tensor: np.ndarray) -> None:
         layer.interpolation3d = "nearest"
 
         napari.run()
+
+if __name__ == "__main__":
+    import torch
+    import sys
+    # Load your data
+    tensor = np.load('scripts/test_output/sample_000000.npz')['data']
+    raw_plot_spatial_eeg_tensor(tensor)

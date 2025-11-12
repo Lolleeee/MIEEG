@@ -80,7 +80,7 @@ class BackupManager(Helper):
             self.last_backup_epoch = epoch
 
 class EarlyStopping(Helper):
-    def __init__(self, patience=5, min_delta=0.0, metric='loss', mode='min'):
+    def __init__(self, patience: int=5, min_delta: float = 0.0, metric : str = 'loss', mode='min'):
         self.patience = patience
         self.min_delta = min_delta
         self.metric = metric
@@ -89,8 +89,8 @@ class EarlyStopping(Helper):
         self.counter = 0
         self.stop_early = False
 
-    def _end_val_step(self, **kwargs):
-        metric = kwargs[self.metric.name]
+    def _end_val_step(self, **kwargs) -> None:
+        metric = kwargs[self.metric]
         if (self.mode == 'min' and metric < self.best_metric - self.min_delta) or (self.mode == 'max' and metric > self.best_metric + self.min_delta):
             self.best_metric = metric
             self.counter = 0
@@ -178,7 +178,8 @@ class GradientLogger(Helper):
         self.counter += 1
         if self.counter % self.interval == 0:
             for name, param in self.model.named_parameters():
-                logging.info(f"Gradient norm for {name}: {param.grad.norm().item():.4f}")
+                if param.grad is not None:
+                    logging.info(f"Gradient norm for {name}: {param.grad.norm().item():.4f}")
 
 
 class LRScheduler(Helper):

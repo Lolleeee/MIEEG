@@ -1,8 +1,10 @@
 import os
+import sys
 from typing import Dict
-
+import copy
 import numpy as np
 from dotenv import load_dotenv
+import tqdm
 
 from packages.data_objects.signal import EegSignal
 from packages.data_objects.dataset import FileDataset
@@ -22,10 +24,10 @@ def main():
 
     loader = FileDataset(
         root_folder=base_folder, yield_identifiers=True, unpack_func=unpack)
-
+    
         
 
-    for patient, trial, eeg_data in loader:
+    for patient, trial, eeg_data in tqdm.tqdm(loader):
 
         EEG = EegSignal(
             unpacked_data=eeg_data,
@@ -36,17 +38,21 @@ def main():
             electrode_schema=debug_constants.CHANNELS_32,
         )
 
-        EEG = wavelet.eeg_wavelet_transform(EEG, bandwidth=[1, 100], freq_samples=25)
+        EEG_Raw = copy.deepcopy(EEG)
 
-        EEG = misc.absolute_values(EEG)
+        WaveletEEG = wavelet.eeg_wavelet_transform(EEG, bandwidth=[1, 100], freq_samples=25)
 
-        EEG = tensor_reshape.reshape_to_spatial(
-            EEG, debug_constants.SPATIAL_DOMAIN_MATRIX_32
+        WaveletEEG = misc.absolute_values(WaveletEEG)
+
+        WaveletEEG = tensor_reshape.reshape_to_spatial(
+            WaveletEEG, debug_constants.SPATIAL_DOMAIN_MATRIX_32
         )  # Move time axis to front
 
-        EEG = tensor_reshape.segment_signal(EEG, window=64, overlap=0)
+        WaveletEEG = tensor_reshape.segment_signal(WaveletEEG, window=250, overlap=0)
 
-        EEG._reorder_signal_dimensions(
+        EEG_Raw = tensor_reshape.segment_signal(EEG_Raw, window=250, overlap=0)
+
+        WaveletEEG.reorder_signal_dimensions(
             ["epochs", "frequencies", "rows", "cols", "time"]
         )
 
@@ -54,14 +60,15 @@ def main():
         # print(KIN.signal.shape, KIN.dim_dict)
         # KIN = sensor_data.window_delta_value(KIN, window=250//2, offset=250//2, dim='time')
         # print(KIN.signal.shape, KIN.dim_dict)
-
+        out = {'tensor': WaveletEEG, 'eeg': EEG_Raw}
         save_signal(
-            EEG,
+            out,
             out_path=out_path,
             out_format="npz",
             separate_epochs=True,
             group_patients=True,
         )
+        
 
 
 if __name__ == "__main__":

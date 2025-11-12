@@ -14,10 +14,10 @@ class TorchWrapper(nn.Module):
         Returns a hashable signature (shapes, keys, dtypes) for detecting structural changes.
         """
         output_sig = tuple(sorted((k, tuple(v.shape), v.dtype) for k, v in outputs.items()))
-        input_sig = (tuple(inputs.shape), inputs.dtype)
+        input_sig = (tuple(inputs['input'].shape), inputs['input'].dtype, tuple(inputs['target'].shape), inputs['target'].dtype)
         return (output_sig, input_sig)
     
-    def _validate_inputs(self, inputs: torch.Tensor) -> torch.Tensor:
+    def _validate_inputs(self, inputs: Dict) -> torch.Tensor:
         """
         Validate input targets.
         
@@ -28,15 +28,19 @@ class TorchWrapper(nn.Module):
         Returns:
             inputs: Validated inputs
         """
-        if not isinstance(inputs, torch.Tensor):
-            raise TypeError(f"Inputs must be a tensor, got {type(inputs)}")
+        if not isinstance(inputs, dict):
+            raise TypeError(f"Inputs must be a dict, got {type(inputs)}")
 
         # Check for NaN/Inf
-        if torch.isnan(inputs).any():
+        if torch.isnan(inputs['input']).any():
             raise ValueError("Input contains NaN values")
-        if torch.isinf(inputs).any():
+        if torch.isinf(inputs['input']).any():
             raise ValueError("Input contains Inf values")
-        
+        if torch.isnan(inputs['target']).any():
+            raise ValueError("Input contains NaN values")
+        if torch.isinf(inputs['target']).any():
+            raise ValueError("Input contains Inf values")
+            
         return inputs
     
     def _validate_and_normalize_outputs(self, outputs: Union[torch.Tensor, Dict, Tuple]) -> Dict[str, torch.Tensor]:
@@ -46,9 +50,7 @@ class TorchWrapper(nn.Module):
         elif isinstance(outputs, tuple):
             outputs = {f'main_output' if i == 0 else f'output_{i}': out for i, out in enumerate(outputs)}
         elif isinstance(outputs, dict):
-            for key, value in outputs.items():
-                if not isinstance(value, (torch.Tensor, int, float)):
-                    raise TypeError(f"Output '{key}' must be a tensor or scalar, got {type(value)}")
+            pass
         else:
             raise TypeError(f"Outputs must be Tensor, Dict, or Tuple. Got {type(outputs)}")
 

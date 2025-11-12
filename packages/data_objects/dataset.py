@@ -1,7 +1,7 @@
 import glob
 import os
 import re
-from typing import Any, Callable, Dict, Union, Tuple
+from typing import Any, Callable, Dict, List, Union, Tuple
 from scipy.io import loadmat
 import numpy as np
 import scipy.io as sio
@@ -40,44 +40,63 @@ def _filetype_loader(file_path: str) -> Any:
         raise TypeError(f"Unsupported file type: {os.path.basename(file_path)}")
     return file 
 
-def general_unpack_func(data: Dict[str, Any]) -> Any:
-        data = data["data"]
-        return data
+def default_unpack_func(data: Dict[str, Any] | np.array | torch.Tensor) -> Dict[str, torch.Tensor]:
+        """
+        Default unpack function that converts input data into a dictionary with keys 'input' and optionally 'target'.
+        If the input is a dictionary with one or two keys, the first key's value is assigned to 'input' and the second (if present) to 'target'.
+
+        Note: In the current implementation it's assumed that if only one key is present, it corresponds to  both 'input' and 'target'.
+        """
+        package = {}
+        
+        if isinstance(data, dict) or isinstance(data, np.lib.npyio.NpzFile):
+
+            assert len(data) <= 2, "Default unpack function only supports dictionaries with one or two keys. First will be 'input', second (optional) will be 'target'."
+            
+            for i, value in enumerate(data.values()):
+                if i == 0:
+                    package['input'] = value
+                elif i == 1:
+                    package['target'] = value
+
+        elif isinstance(data, np.array) or isinstance(data, torch.Tensor):
+            package['input'] = data
+
+        else:
+            raise TypeError(f'data type {type(data)} currently not supported')
+        
+        return package
 
 class BasicDataset():
-    def __init__(self, root_folder: str, unpack_func: Callable[[Any], Any] = None):
+    def __init__(self, root_folder: str, unpack_func: Callable[[Any], Any] = None) -> None:
 
-        self.root_folder = root_folder
+        self.root_folder: str = root_folder
+        self.unpack_func: Callable[[Any], Any] = unpack_func if unpack_func is not None else default_unpack_func
 
-        if unpack_func is None:
-            self.unpack_func = general_unpack_func
-        else:
-            self.unpack_func = unpack_func
+        self.item_list: List[str] = []
 
-        self.item_list = []
-
-        if root_folder is not None and os.path.isdir(root_folder):
+        assert os.path.exists(root_folder), f"Root folder does not exist: {root_folder}"
+        if os.path.isdir(root_folder):
             self._get_item_list()
             if len(self.item_list) == 0:
                 raise ValueError(f"No files found in directory: {root_folder}")
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.item_list)
     
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         item_path = self.item_list[idx]
         try:
             packed_data = _filetype_loader(item_path)
-
-            if self.unpack_func:
-                unpacked_data = self.unpack_func(packed_data)
-            else:
-                unpacked_data = packed_data
+        except Exception as e:
+            raise TypeError(f"Error loading {item_path}: {e}")
+        
+        try:
+            unpacked_data = self.unpack_func(packed_data)
 
             return unpacked_data
         except Exception as e:
-            raise TypeError(f"Error loading {item_path}: {e}")
-
+            raise ValueError(f"Error unpacking data object: {e}")
     # Recursively gather all file paths inside root_folder
     def _get_item_list(self, base_folder: str = None):
         if base_folder is None:
@@ -153,29 +172,36 @@ class TorchDataset(Dataset, BasicDataset):
     def __init__(
         self,
         root_folder: str,
-        unpack_func: Union[Callable[[Any], Any], str] = None,
+        unpack_func: Callable = None,
+
     ):
         BasicDataset.__init__(self, root_folder, unpack_func)
         self._norm_params = None
+        self._target_norm_params = None
 
     def __getitem__(self, idx):
         data = BasicDataset.__getitem__(self, idx)
-        if isinstance(data, np.ndarray):
-            data = torch.from_numpy(data)
 
         if self._norm_params is not None:
-            data = self._normalize_item(data)
-        
+            data['input'] = self._normalize_item(data['input'])
 
-        return data.float()
+        if self._target_norm_params is not None and 'target' in data:
+            data['target'] = self._normalize_item(data['target'], is_target=True)
 
-    def _normalize_item(self, item):
-        mean = self._norm_params[0]  
-        std = self._norm_params[1]   
+        return data
 
+    def _normalize_item(self, item, is_target=False):
+        if is_target:
+            mean = self._target_norm_params[0]  
+            std = self._target_norm_params[1]   
+        else:
+            mean = self._norm_params[0]  
+            std = self._norm_params[1]   
+        if isinstance(item, np.ndarray):
+            item = torch.from_numpy(item)
         try:
             item = (item - mean) / (std + 1e-10)
-            return item
+            return item.float()
         except Exception as e:
             raise ValueError(f"Error normalizing data: {e}")
 
@@ -185,7 +211,7 @@ class TestTorchDataset(TorchDataset):
     def __init__(
         self,
         root_folder: str = None,
-        unpack_func: Union[Callable[[Any], Any], str] = general_unpack_func,
+        unpack_func: Union[Callable[[Any], Any], str] = default_unpack_func,
         nsamples: int = 10,
         shape: tuple = (25, 7, 5, 250),
     ):  

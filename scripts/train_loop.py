@@ -1,82 +1,80 @@
 
-from copy import copy
-import sys
-from packages.models.autoencoder import basicConv3DAE
-from packages.plotting.reconstruction_plots import plot_reconstruction_distribution
-from packages.train.training import train_model
-from packages.train.loss import VaeLoss, TorchMSELoss, PerceptualLoss
-from packages.train.helpers import BackupManager, EarlyStopping
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 from packages.io.torch_dataloaders import get_data_loaders
 import torch
-import os
 from packages.data_objects.dataset import TorchDataset, TestTorchDataset
 from dotenv import load_dotenv
-# model = Conv3DAE(in_channels=25, embedding_dim=128, hidden_dims=[64, 128, 256], use_convnext=False)
+from packages.models.vqae_23 import VQAE, VQVAEConfig
+import sys
+from packages.train.loss import VQAE23Loss
+from dataclasses import dataclass
 
-from packages.models.vqae import SequenceProcessor, VQVAE
-from packages.models.vqae_skip import SkipConnectionScheduler
-from packages.models.vqae_skip import VQAE as VQVAESkip
-from packages.train.loss import VQVAELoss, SequenceVQVAELoss
+from packages.train.seed import _set_seed
+_set_seed(seed=42)
+@dataclass
+class Config(VQVAEConfig):
+    """Configuration for the VQ-VAE model."""
+    use_quantizer: bool = False  # Whether to use vector quantization
+    # Data shape parameters
+    num_freq_bands: int = 25          # F: Number of frequency bands
+    spatial_rows: int = 7              # R: Spatial grid rows
+    spatial_cols: int = 5              # C: Spatial grid cols
+    time_samples: int = 250            # T: Time samples per clip
+    chunk_dim: int = 25                # ChunkDim: Time chunk length
+    orig_channels: int = 32            # Original EEG channels (R*C or separate)
+    
+    # Encoder parameters
+    encoder_2d_channels: list = None   # [32, 64] - 2D conv channels
+    encoder_3d_channels: list = None   # [64, 128, 256] - 3D conv channels
+    embedding_dim: int = 128           # Final embedding dimension
+    
+    # VQ parameters
+    codebook_size: int = 512           # Number of codebook vectors
+    commitment_cost: float = 0.25      # Beta for commitment loss
+    ema_decay: float = 0.99            # EMA decay for codebook updates
+    epsilon: float = 1e-5              # Small constant for numerical stability
+    
+    # Decoder parameters
+    decoder_channels: list = None
 
-model = SequenceProcessor(chunk_shape=(25, 7, 5, 32), embedding_dim=64, codebook_size=1024, use_quantizer=False)
-model.chunk_ae = VQVAESkip(
-    in_channels=25,
-    input_spatial=(7, 5, 32),
-    embedding_dim=64,
-    codebook_size=512,
-    num_downsample_stages=3,
-    use_quantizer=False,
-    use_skip_connections=False,
-    skip_strength=0.1,
-    commitment_cost=0.5,
-    decay=0.9999
-)
-model_dict = torch.load('model_backups/best_model_epoch_89.pt', map_location='cpu')
-model.load_state_dict(model_dict, strict=True)
+
+model = VQAE(Config())
+
+dataset = TorchDataset(root_folder="scripts/test_output/EEG+Wavelet")
+train_loader, val_loader, test_loader = get_data_loaders(dataset, sets_size={'train': 0.3333, 'val': 0.3333}, batch_size=32, norm_axes=(0,4), target_norm_axes=(0, 2))
+
 
 load_dotenv()
-# Dummy training loop
-optimizer = torch.optim.AdamW
-criterion = SequenceVQVAELoss(
-    recon_loss_type='perceptual',
+
+criterion = VQAE23Loss(
+    recon_loss_type='mse',
     recon_weight=1,
     perceptual_weight=0.2,
     bottleneck_cov_weight=1,
     bottleneck_var_weight=2,
     min_variance=0.15
 )
-
+criterion.disable_validation()
 metrics = {}
-    
-# dataset = CustomTestDataset(root_folder=dataset_path, nsamples=10)
-dataset = TorchDataset("test/test_output/", chunk_size=32)
 
-train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.01, 'val': 0.3}, batch_size=32)
-
-# sys.exit(0)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-x = next(iter(train_loader)).to(device)
-print(f"x shape: {x.shape}")
+x = next(iter(train_loader))
+
 
 # Correct training loop
 model.train()
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 losses = []
-print(f"Current quantizer bool: {model.chunk_ae.use_quantizer}")
-for i in range(500):
-    if i == 2510000:
-        model.chunk_ae.use_quantizer = False
-        print(f"Quantizer enabled at iteration {i}, Current quantizer bool: {model.chunk_ae.use_quantizer}")
+
+for i in range(300):
     optimizer.zero_grad()
     
     # Forward pass
-    out = model(x)  # Get both outputs
+    out = model(x['input'])  # Get both outputs
     loss = criterion(out, x)
     
     # Backward pass
-    loss.backward()
+    loss['loss'].backward()
     
     # Clip gradients
     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -85,28 +83,29 @@ for i in range(500):
     optimizer.step()
     
     if i % 50 == 0:
-        print(f"{i}: loss={loss.item():.4f}, grad_norm={grad_norm:.4f}")
-        print(criterion.last_losses)
-    losses.append(loss.item())
+        print(f"{i}: loss={loss['loss'].item():.4f}")
+    losses.append(loss['loss'].item())
 
-        
+print(x['target'].shape)
+print(out['reconstruction'].shape)
 
 import matplotlib.pyplot as plt
-plt.figure()
-plt.plot(losses, marker='.', linewidth=1, label='train_loss')
-plt.xlabel('Iteration')
-plt.ylabel('Loss')
-plt.title('Training Loss')
-plt.grid(True)
-plt.legend()
-plt.show()
-    
-from packages.plotting.reconstruction_plots import plot_reconstruction_slices, plot_reconstruction_performance
-out = model(x)
 
-rec = out[0]
-rec = rec.detach().cpu().numpy()
-orig = x.detach().cpu().numpy()
-plot_reconstruction_slices(orig[0, 0,...], rec[0,0,...], n_channels=6)
-plot_reconstruction_performance(orig[0, 0,...], rec[0,0,...])
-#autoencoder_test_plots(model, val_loader, nsamples=5)
+# Number of samples to plot
+N = 4
+
+fig, axes = plt.subplots(N, 1, figsize=(12, 3*N))
+if N == 1:
+    axes = [axes]
+
+for i in range(N):
+    axes[i].plot(x['target'][0, i,...].detach().cpu().numpy(), label='Target', alpha=0.7)
+    axes[i].plot(out['reconstruction'][0, i,...].detach().cpu().numpy(), label='Reconstruction', alpha=0.7)
+    axes[i].set_title(f'Sample {i+1}')
+    axes[i].set_xlabel('Time')
+    axes[i].set_ylabel('Amplitude')
+    axes[i].legend()
+    axes[i].grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.show()

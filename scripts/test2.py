@@ -60,7 +60,7 @@ def main():
         
         EEG = tensor_reshape.segment_signal(EEG, window=250, overlap=0)
 
-        EEG._reorder_signal_dimensions(
+        EEG.reorder_signal_dimensions(
             ["epochs", "frequencies", "rows", "cols", "time"]
         )
         print(EEG.signal.shape)

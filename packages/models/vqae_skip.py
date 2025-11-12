@@ -611,9 +611,8 @@ class SequenceVQAE(nn.Module):
     Process full EEG window as sequence of chunks.
     Handles arbitrary chunk configurations.
     
-    Example usage for (25, 7, 5, 250) -> (10, 25, 7, 5, 25):
-        - Original: 25 channels, 7x5 spatial, 250 time samples
-        - Chunked: 10 chunks, 25 channels each, 7x5 spatial, 25 samples per chunk
+    Input: (B, C, H, W, T_full) where T_full = num_chunks * chunk_size
+    Output: Reconstruction of same shape
     """
     def __init__(
         self,
@@ -623,25 +622,27 @@ class SequenceVQAE(nn.Module):
         num_downsample_stages=3,
         use_quantizer=True,
         use_skip_connections=False,
-        skip_strength=1.0,  # Global skip strength (0.0 to 1.0)
-        skip_strengths=None,  # Per-layer skip strengths (list of floats)
-        skip_mode='concat',  # 'concat', 'add', or 'weighted_add'
+        skip_strength=1.0,
+        skip_strengths=None,
+        skip_mode='concat',
         commitment_cost=0.25, 
         decay=0.99
     ):
         super().__init__()
         
-        self.chunk_shape = chunk_shape
+        self.chunk_shape = chunk_shape  # (C, H, W, T_chunk)
         self.embedding_dim = embedding_dim
         self.use_quantizer = use_quantizer
+        
+        # These will be set on first forward pass
         self.num_chunks = None
         self.batch_size = None
-        self.input_shape = None
+        self.input_shape = None  # Full input shape (C, H, W, T_full)
 
         # Create chunk autoencoder
         self.chunk_ae = VQAE(
             in_channels=chunk_shape[0],
-            input_spatial=chunk_shape[1:],  #(H, W, T)
+            input_spatial=chunk_shape[1:],  # (H, W, T_chunk)
             embedding_dim=embedding_dim,
             codebook_size=codebook_size,
             num_downsample_stages=num_downsample_stages,
@@ -654,61 +655,115 @@ class SequenceVQAE(nn.Module):
             decay=decay
         )
         
-    def shapes_init(self, chunks):
-        """Initialize shapes based on chunk configuration."""
-        self.num_chunks = chunks.shape[-1] // self.chunk_shape[-1]
-        self.input_shape = chunks.shape[1:]
+    def _chunk_data(self, data):
+        """
+        Split data into chunks along temporal dimension.
+        
+        Input: (B, C, H, W, T_full)
+        Output: (B*num_chunks, C, H, W, T_chunk)
+        """
+        B, C, H, W, T_full = data.shape
+        T_chunk = self.chunk_shape[-1]
+        
+        # Calculate number of chunks
+        num_chunks = T_full // T_chunk
+        
+        if num_chunks == 0:
+            raise ValueError(f"Input temporal length {T_full} is smaller than chunk size {T_chunk}")
+        
+        # Crop to fit exact number of chunks
+        T_cropped = num_chunks * T_chunk
+        data = data[..., :T_cropped]
+        
+        # Reshape: (B, C, H, W, num_chunks, T_chunk)
+        data = data.view(B, C, H, W, num_chunks, T_chunk)
+        
+        # Permute to: (B, num_chunks, C, H, W, T_chunk)
+        data = data.permute(0, 4, 1, 2, 3, 5)
+        
+        # Flatten batch and chunks: (B*num_chunks, C, H, W, T_chunk)
+        data = data.reshape(B * num_chunks, C, H, W, T_chunk)
+        
+        return data, num_chunks
+    
+    def _unchunk_data(self, data, batch_size, num_chunks):
+        """
+        Reconstruct full temporal dimension from chunks.
+        
+        Input: (B*num_chunks, C, H, W, T_chunk)
+        Output: (B, C, H, W, T_full)
+        """
+        C, H, W, T_chunk = data.shape[1:]
+        
+        # Reshape: (B, num_chunks, C, H, W, T_chunk)
+        data = data.view(batch_size, num_chunks, C, H, W, T_chunk)
+        
+        # Permute: (B, C, H, W, num_chunks, T_chunk)
+        data = data.permute(0, 2, 3, 4, 1, 5)
+        
+        # Flatten temporal: (B, C, H, W, T_full)
+        T_full = num_chunks * T_chunk
+        data = data.reshape(batch_size, C, H, W, T_full)
+        
+        return data
 
-    def encode_sequence(self, chunks):
+    def encode_sequence(self, data):
         """
         Encode sequence of chunks.
-        Input: (B, C, H, W, T)
-        Output: (B, num_chunks, embedding_dim), vq_loss, indices
+        
+        Input: (B, C, H, W, T_full)
+        Output: (B*num_chunks, embedding_dim), vq_loss, indices
         """
-        if self.num_chunks is None or self.input_shape is None: self.shapes_init(chunks)
-
-        self.batch_size = chunks.shape[0]
-
-        # Reshape to process all chunks
-        chunks_flat = chunks.view(-1, *self.chunk_shape)
-
+        # Store batch size
+        self.batch_size = data.shape[0]
+        
+        # Store input shape for reconstruction
+        if self.input_shape is None:
+            self.input_shape = data.shape[1:]  # (C, H, W, T_full)
+        
+        # Chunk the data
+        chunks, self.num_chunks = self._chunk_data(data)  # (B*num_chunks, C, H, W, T_chunk)
+        
         # Encode each chunk
-        embeddings, vq_loss, indices = self.chunk_ae.encode(chunks_flat)
-
-        # Reshape back to sequence
-        embeddings = embeddings.view(self.batch_size*self.num_chunks, self.embedding_dim)
+        embeddings, vq_loss, indices = self.chunk_ae.encode(chunks)
         
         return embeddings, vq_loss, indices
     
     def decode_sequence(self, embeddings):
         """
-        Decode sequence of embeddings back to chunks.
+        Decode sequence of embeddings back to full data.
+        
         Input: (B*num_chunks, embedding_dim)
-        Output: (B, C, H, W, T)
+        Output: (B, C, H, W, T_full)
         """
+        # Decode chunks
+        chunks_recon = self.chunk_ae.decode(embeddings)  # (B*num_chunks, C, H, W, T_chunk)
         
-        # Reshape to decode all chunks
-        embeddings_flat = embeddings.view(-1, self.embedding_dim)
+        # Reconstruct full temporal dimension
+        data_recon = self._unchunk_data(
+            chunks_recon, 
+            self.batch_size, 
+            self.num_chunks
+        )
         
-        # Decode each chunk
-        chunks_recon = self.chunk_ae.decode(embeddings_flat)
-        
-        # Reshape back to sequence
-        chunks_recon = chunks_recon.view(self.batch_size, *self.input_shape)
-
-        return chunks_recon
+        return data_recon
     
-    def forward(self, chunks):
+    def forward(self, data):
         """
         Full forward pass.
-        Input: (B, num_chunks, C, H, W, T)
-        Output: (reconstruction, vq_loss, indices)
+        
+        Input: (B, C, H, W, T_full)
+        Output: dict with 'reconstruction', 'vq_loss', 'embeddings', 'indices'
         """
-        embeddings, vq_loss, indices = self.encode_sequence(chunks)
-        chunks_recon = self.decode_sequence(embeddings)
-
-        return {'reconstruction': chunks_recon, 'vq_loss': vq_loss, 'embeddings': embeddings, 'indices': indices}
-
+        embeddings, vq_loss, indices = self.encode_sequence(data)
+        data_recon = self.decode_sequence(embeddings)
+        
+        return {
+            'reconstruction': data_recon, 
+            'vq_loss': vq_loss, 
+            'embeddings': embeddings, 
+            'indices': indices
+        }
 
 
 class SkipConnectionScheduler:

@@ -2,7 +2,7 @@ import logging
 import torch
 from typing import Dict, TYPE_CHECKING, Tuple
 from packages.train.trainer_config_schema import PlotType, SanityCheckConfig, TrainerConfig, DatasetType
-
+import copy
 from packages.train.training import Trainer
 
 logging.basicConfig(
@@ -91,12 +91,16 @@ class SanityChecker(Trainer):
         sanity_checked_trainer_config['dataset']['dataset_args']['root_folder'] = self.trainer_config.dataset.dataset_args.get('root_folder', None) 
 
         # Create a version with only a single epoch for initial validation check
-        single_epoch_sanity_checked_trainer_config = sanity_checked_trainer_config.copy()
+        single_epoch_sanity_checked_trainer_config = copy.deepcopy(sanity_checked_trainer_config)
         single_epoch_sanity_checked_trainer_config['train_loop']['epochs'] = 1
-        
+    
         assert isinstance(single_epoch_sanity_checked_trainer_config, Dict) and isinstance(sanity_checked_trainer_config, Dict)
         sanity_checked_trainer_config = TrainerConfig(**sanity_checked_trainer_config)
         single_epoch_sanity_checked_trainer_config = TrainerConfig(**single_epoch_sanity_checked_trainer_config)
+
+        assert sanity_checked_trainer_config.train_loop.epochs == self.sanity_config['epochs']
+        
+        assert single_epoch_sanity_checked_trainer_config.train_loop.epochs == 1
 
         return sanity_checked_trainer_config, single_epoch_sanity_checked_trainer_config
     

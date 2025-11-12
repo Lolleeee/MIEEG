@@ -1,8 +1,9 @@
 import logging
 import os
+from signal import signal
+import sys
 import time
-from typing import Dict
-
+from typing import Dict, List, Tuple, Union
 import numpy as np
 
 from packages.data_objects.signal import GLOBAL_DIM_KEYS, SignalObject
@@ -10,7 +11,7 @@ from packages.data_objects.signal import GLOBAL_DIM_KEYS, SignalObject
 logging.basicConfig(level=logging.INFO)
 
 def save_signal(
-    signal: SignalObject,
+    signals_dict: Dict[str, SignalObject],
     out_path: str,
     out_format: str = "npz",
     separate_epochs: bool = True,
@@ -18,37 +19,44 @@ def save_signal(
 ):
     """Saves the signal data to the specified output path in the desired format."""
     os.makedirs(out_path, exist_ok=True)
-    if signal.patient is None or signal.trial is None:
-        raise ValueError(
-            "Signal object must have patient and trial information to be saved."
-        )
-    if separate_epochs and GLOBAL_DIM_KEYS.EPOCHS.value not in signal.dim_dict:
-        raise ValueError(
-            "Signal object does not contain segments dimension for separate epoch saving."
-        )
 
-    patient_id = signal.patient
-    trial_id = signal.trial
+    # Check patient, trial, nEpochs consistency
+    sample_sig = next(iter(signals_dict.values()))
+    assert all(isinstance(sig, SignalObject) for sig in signals_dict.values())
+    patient_id = sample_sig.patient
+    trial_id = sample_sig.trial
+    assert isinstance(patient_id, int) and isinstance(trial_id, int)
+
     if group_patients:
-        os.makedirs(os.path.join(out_path, f"patient{patient_id}"), exist_ok=True)
-        out_path = os.path.join(out_path, f"patient{patient_id}")
+        os.makedirs(os.path.join(out_path, f"patient{sample_sig.patient}"), exist_ok=True)
+        out_path = os.path.join(out_path, f"patient{sample_sig.patient}")
+    
+    assert all(signal.patient == patient_id for signal in signals_dict.values()), 'Found different patients in signal list, please check sync between patients'
+    assert all(signal.trial == trial_id for signal in signals_dict.values()), 'Found different trials in signal list, please check sync between trials'
+    assert all(sample_sig.epochs == sig.epochs for sig in signals_dict.values())
+    
+    if separate_epochs:
+        package = {}
+        for idx in range(sample_sig.epochs):
+            for sig_name, sig in signals_dict.items():
 
-    if separate_epochs and GLOBAL_DIM_KEYS.EPOCHS.value in signal.dim_dict:
-        seg_axis = signal.dim_dict[GLOBAL_DIM_KEYS.EPOCHS.value]
-        for idx in range(signal.signal.shape[seg_axis]):
-            slices = [slice(None)] * signal.signal.ndim
-            slices[seg_axis] = idx
-            seg_data = signal.signal[tuple(slices)]
+                seg_axis = sig.dim_dict[GLOBAL_DIM_KEYS.EPOCHS.value]
 
-            package = {"data": seg_data}
+                slices = [slice(None)] * sig.signal.ndim
+                slices[seg_axis] = idx
+                seg_data = sig.signal[tuple(slices)]
+                
+                package[sig_name] = seg_data
+
             _save_package(
                 out_path, patient_id, trial_id, package, seg_idx=idx, fmt=out_format
             )
     else:
-        package = {"data": signal.signal}
+        package = signals_dict
         _save_package(
-            out_path, patient_id, trial_id, package, seg_idx=None, fmt=out_format
-        )
+                    out_path, patient_id, trial_id, package, seg_idx=None, fmt=out_format
+                )
+
 
 
 # Deprecated function, kept for reference

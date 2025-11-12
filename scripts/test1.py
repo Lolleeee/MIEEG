@@ -41,7 +41,7 @@ EEG = tensor_reshape.segment_signal(EEG, window=250, overlap=200)
 # print(KIN.signal.shape, KIN.dim_dict)
 # KIN = sensor_data.window_delta_value(KIN, window=250//2, offset=250//2, dim='time')
 # print(KIN.signal.shape, KIN.dim_dict)
-EEG._reorder_signal_dimensions(["epochs", "frequencies", "rows", "cols", "time"])
+EEG.reorder_signal_dimensions(["epochs", "frequencies", "rows", "cols", "time"])
 
 save_signal(EEG, out_path=out_path, out_format="npz", separate_epochs=True)
 

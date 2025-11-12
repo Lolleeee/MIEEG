@@ -1,12 +1,14 @@
+import logging
 from pydantic import BaseModel, Field, field_validator, ConfigDict, model_validator
 from torch.utils.data import DataLoader
 from torch import nn, optim, cuda
 from torch import device as torchdevice
 from typing import Optional, Literal, List, Any, Union
 from packages.train.metrics import TorchMetric, RMSE, MSE, MAE, AxisCorrelation
-from packages.train.loss import TorchLoss, TorchMSELoss, TorchL1Loss, SequenceVQVAELoss
+from packages.train.loss import TorchLoss, TorchMSELoss, TorchL1Loss, SequenceVQVAELoss, VQAE23Loss
 from packages.models.vqae_skip import SequenceVQAE as SequenceVQAE_Skip
 from packages.models.vqae import VQVAE
+from packages.models.vqae_23 import VQAE as VQAE23
 from packages.models.test_models import SimpleVQVAE, SimpleAutoencoder
 from packages.data_objects.dataset import TorchDataset, TestTorchDataset
 from enum import Enum
@@ -23,6 +25,7 @@ class ModelType(str, Enum):
     #Test models
     SIMPLE_VQVAE = "simple_vqvae"
     SIMPLE_AE = "simple_ae"
+    VQAE23 = "vqae23"
 
 class OptimizerType(str, Enum):
     ADAM = "adam"
@@ -33,7 +36,7 @@ class LossType(str, Enum):
     MSE = "mse"
     L1 = "l1"
     SEQVQVAELOSS = "seq_vqvae_loss"
-
+    VQAE23LOSS = "vqae23_loss"
 
 
 class DatasetType(str, Enum):
@@ -61,6 +64,7 @@ MODEL_MAP = {
     ModelType.SEQUENCE_VQAE_SKIP: SequenceVQAE_Skip,
     ModelType.SIMPLE_VQVAE: SimpleVQVAE,
     ModelType.SIMPLE_AE: SimpleAutoencoder,
+    ModelType.VQAE23: VQAE23,
 }
 
 OPTIMIZER_MAP = {
@@ -72,6 +76,7 @@ LOSS_MAP = {
     LossType.MSE: TorchMSELoss,
     LossType.L1: TorchL1Loss,
     LossType.SEQVQVAELOSS: SequenceVQVAELoss,
+    LossType.VQAE23LOSS: VQAE23Loss,
 }
 
 DATASET_MAP = {
@@ -105,7 +110,8 @@ class SetSizes(BaseModel):
 class DataLoaderConfig(BaseModel):
     set_sizes: SetSizes = Field(default_factory=SetSizes, description="Proportions for train/val/test splits")
     batch_size: int = Field(default=32, gt=0)
-    norm_axes: Optional[List[int]] = Field(default=None, description="Axes to normalize over")
+    norm_axes: Optional[List[int]] = Field(default=None, description="Axes to normalize model input over")
+    target_norm_axes: Optional[List[int]] = Field(default=None, description="Axes to normalize target over")
 
 class DatasetConfig(BaseModel):
     dataset_type: DatasetType = Field(default=DatasetType.TORCH_DATASET, description="Type of dataset to use")
@@ -166,13 +172,13 @@ class HistoryPlotSchema(BaseModel):
 class EarlyStoppingSchema(BaseModel):
     patience: int = Field(default=30, gt=0, description="Number of epochs with no improvement after which training will be stopped")
     min_delta: float = Field(default=0.0, ge=0.0, description="Minimum change to qualify as an improvement")
-    metric: Union[MetricType, LossType] = Field(default=LossType.MSE, description="Metric to monitor for early stopping")
+    metric: str = Field(default='loss', description="Metric to monitor for early stopping")
     mode: Literal["min", "max"] = Field(default="min")
 
 class BackupManagerSchema(BaseModel):
     backup_interval: int = Field(default=10, gt=0, description="Interval (in epochs) to save model backups")
     backup_path: str = Field(default="./model_backups", description="Path to save model backups")
-    metric: Union[MetricType, LossType] = Field(default=LossType.MSE, description="Metric to monitor for backup")
+    metric: str = Field(default='loss', description="Metric to monitor for backup")
     mode: Literal["min", "max"] = Field(default="min", description="Mode for monitoring metric")
 
 class ReduceLROnPlateauSchema(BaseModel):
@@ -252,24 +258,14 @@ class TrainerConfig(BaseModel):
     def get_model_class(self):
         """Returns the actual model class"""
         return MODEL_MAP[self.model.model_type]
-    
 
-    @model_validator(mode='after')
-    def validate_helpers_monitored_metrics(self):
-        #Check if monitored helpers metrics actually exist in info metrics
-        for helper in self.helpers:
-            if hasattr(helper, 'metric'):
-                if helper not in self.info.metrics:
-                    print(helper)
-                    raise ValueError(f"[{helper}] monitored metric {self.helpers[helper].metric} not found in info.metrics")
-        return self
 # ===== Usage Functions =====
 
 def save_config(config: TrainerConfig, path: str):
     """Save config to JSON"""
     with open(path, 'w') as f:
         json.dump(config.model_dump(), f, indent=2)
-    print(f"Config saved to {path}")
+    logging.info(f"Config saved to {path}")
 
 
 def load_config(path: str) -> TrainerConfig:

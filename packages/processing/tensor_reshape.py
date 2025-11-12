@@ -39,7 +39,7 @@ def _update_dim_dict(Signal, new_order):
 
 def _ensure_dim_order(Signal, order):
     if not Signal._check_dim_order(order):
-        Signal._reorder_signal_dimensions(order)
+        Signal.reorder_signal_dimensions(order)
 
 
 def reshape_to_spatial(
@@ -293,7 +293,7 @@ def raw_reshape_to_spatial(
     if spatial_domain_matrix.ndim == 2:
         if Signal.is_spatial_signal:
             if not Signal._check_dim_order(["rows", "cols"]):
-                Signal._reorder_signal_dimensions(["rows", "cols"])
+                Signal.reorder_signal_dimensions(["rows", "cols"])
 
             num_rows, num_cols = spatial_domain_matrix.shape
             original_shape = Signal.signal.shape
@@ -316,7 +316,7 @@ def raw_reshape_to_spatial(
 
         else:
             if not Signal._check_dim_order(["channels"]):
-                Signal._reorder_signal_dimensions(["channels"])
+                Signal.reorder_signal_dimensions(["channels"])
 
             num_rows, num_cols = spatial_domain_matrix.shape
             original_shape = Signal.signal.shape
@@ -340,7 +340,7 @@ def raw_reshape_to_spatial(
     if spatial_domain_matrix.ndim == 1:
         if Signal.is_spatial_signal:
             if not Signal._check_dim_order(["rows", "cols"]):
-                Signal._reorder_signal_dimensions(["rows", "cols"])
+                Signal.reorder_signal_dimensions(["rows", "cols"])
 
             num_electrodes = len(spatial_domain_matrix)
             original_shape = Signal.signal.shape
@@ -362,7 +362,7 @@ def raw_reshape_to_spatial(
             Signal.signal = reshaped_signal
         else:
             if not Signal._check_dim_order(["channels"]):
-                Signal._reorder_signal_dimensions(["channels"])
+                Signal.reorder_signal_dimensions(["channels"])
 
             num_electrodes = len(spatial_domain_matrix)
             original_shape = Signal.signal.shape
