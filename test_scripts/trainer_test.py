@@ -40,6 +40,12 @@ class Config(VQVAEConfig):
     # Decoder parameters
     decoder_channels: list = None
 
+    dropout_2d: float = 0.1          # Dropout for 2D encoder
+    dropout_3d: float = 0.1          # Dropout for 3D encoder
+    dropout_bottleneck: float = 0.2  # Dropout at bottleneck
+    dropout_decoder: float = 0.1     # Dropout for decoder
+    
+
 config = {
     'model': {
         'model_type': ModelType.VQAE23,

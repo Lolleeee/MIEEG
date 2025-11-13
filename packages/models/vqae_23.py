@@ -204,7 +204,7 @@ class Encoder2DStage(nn.Module):
         layers = []
         in_channels = 1  # Single channel input after reshape
         
-        for out_channels in config.encoder_2d_channels:
+        for i, out_channels in enumerate(config.encoder_2d_channels):
             layers.extend([
                 nn.Conv2d(
                     in_channels,
@@ -215,6 +215,7 @@ class Encoder2DStage(nn.Module):
                 ),
                 nn.BatchNorm2d(out_channels),
                 nn.SiLU(inplace=True),
+                nn.Dropout2d(p=config.dropout_2d) if i < len(config.encoder_2d_channels) - 1 else nn.Identity()
             ])
             in_channels = out_channels
         
@@ -256,7 +257,7 @@ class Encoder3DStage(nn.Module):
         layers = []
         in_channels = channels_in  # This is C_out * F_out
         
-        for out_channels in config.encoder_3d_channels:
+        for i, out_channels in enumerate(config.encoder_3d_channels):
             layers.extend([
                 nn.Conv3d(
                     in_channels,
@@ -267,6 +268,7 @@ class Encoder3DStage(nn.Module):
                 ),
                 nn.BatchNorm3d(out_channels),
                 nn.SiLU(inplace=True),
+                nn.Dropout3d(p=config.dropout_3d) if i < len(config.encoder_3d_channels) - 1 else nn.Identity()
             ])
             in_channels = out_channels
         
@@ -290,6 +292,7 @@ class Encoder3DStage(nn.Module):
         
         self.projection = nn.Sequential(
             nn.Flatten(),
+             nn.Dropout(p=config.dropout_bottleneck),
             nn.Linear(flatten_dim, config.embedding_dim),
             nn.LayerNorm(config.embedding_dim)
         )
@@ -328,6 +331,7 @@ class Decoder(nn.Module):
         
         self.projection = nn.Sequential(
             nn.Linear(config.embedding_dim, self.init_dim),
+            nn.Dropout(p=0.2),
             nn.SiLU(inplace=True)
         )
         
@@ -346,6 +350,7 @@ class Decoder(nn.Module):
                 ),
                 nn.BatchNorm1d(out_channels),
                 nn.SiLU(inplace=True),
+                nn.Dropout(p=config.dropout_decoder) if i < len(config.decoder_channels[1:]) - 1 else nn.Identity() 
             ])
             in_channels = out_channels
         
