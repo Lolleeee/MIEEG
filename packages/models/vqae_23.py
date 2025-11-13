@@ -31,6 +31,11 @@ class VQVAEConfig:
     # Decoder parameters
     decoder_channels: list = None      # [256, 128, 64] - Decoder channels
     
+    dropout_2d: float = 0.1          # Dropout for 2D encoder
+    dropout_3d: float = 0.1          # Dropout for 3D encoder
+    dropout_bottleneck: float = 0.2  # Dropout at bottleneck
+    dropout_decoder: float = 0.1     # Dropout for decoder
+    
     def __post_init__(self):
         if self.encoder_2d_channels is None:
             self.encoder_2d_channels = [32, 64]
