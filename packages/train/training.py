@@ -269,7 +269,7 @@ class Trainer():
                 self.metrics_handler._new_epoch_setup(epoch)
 
                 self.model.train()
-                print("model.train")
+                
                 train_metrics = self._train_epoch()
                 
                 self.metrics_handler._new_epoch_setup(epoch)
@@ -317,7 +317,7 @@ class Trainer():
         return self.metrics_handler.metrics_eval
     
     def _start_val_loop(self):
-        print("model.eval")
+        
         self.model.eval()
 
         with torch.no_grad():
