@@ -17,7 +17,7 @@ from packages.models.vqae_23 import VQVAEConfig
 @dataclass
 class Config(VQVAEConfig):
     """Configuration for the VQ-VAE model."""
-    use_quantizer: bool = True  # Whether to use vector quantization
+    use_quantizer: bool = False  # Whether to use vector quantization
     # Data shape parameters
     num_freq_bands: int = 25          # F: Number of frequency bands
     spatial_rows: int = 7              # R: Spatial grid rows
@@ -84,10 +84,11 @@ config = {
     'helpers': {
         'history_plot': {
             'plot_type': PlotType.EXTENDED,
-            'save_path': './training_history'
+            'save_path': './training_history',
+            'metrics_logged': ['MSE']
         },
         'early_stopping': {
-            'patience': 2,
+            'patience': 1000,
             'min_delta': 0.0,
             'metric': 'loss',
             'mode': 'min'
@@ -98,7 +99,8 @@ config = {
     },
     'info': {
         'metrics': [MetricType.MAE, MetricType.MSE],
-        'metrics_args': None
+        'metrics_args': None,
+
     },
     'device': 'cpu',
     'sanity_check': {

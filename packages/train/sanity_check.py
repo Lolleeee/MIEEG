@@ -74,9 +74,9 @@ class SanityChecker(Trainer):
             else:
                 sanity_checked_trainer_config["helpers"][helper] = None
 
-        # Remove all metrics to avoid interference
-        sanity_checked_trainer_config["info"]["metrics"] = []
-        sanity_checked_trainer_config["info"]["metrics_args"] = None
+        # # Remove all metrics to avoid interference
+        # sanity_checked_trainer_config["info"]["metrics"] = []
+        # sanity_checked_trainer_config["info"]["metrics_args"] = None
 
         # Remove all other non-essential configs that may interfere
         sanity_checked_trainer_config['gradient_control']['grad_clip'] = None
@@ -123,6 +123,7 @@ class SanityChecker(Trainer):
             logging.info("Starting sanity check training...")
             logging.info("Now turning off runtime validation.")
             logging.info("=" * 60)
+
             # Only run training and validation, skip test
             # Initialize parent Trainer with modified config
             super().__init__(self.sanity_checked_trainer_config.model_dump())

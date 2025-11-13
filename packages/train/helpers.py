@@ -1,7 +1,7 @@
 import logging
 import os
 from re import match
-from typing import Callable, Dict
+from typing import Callable, Dict, Set
 
 import matplotlib.pyplot as plt
 import torch
@@ -107,12 +107,23 @@ class History(Helper):
         save_path: str,
         plot_type: PlotType,
         metrics: Dict[str, float],
+        metrics_logged: Set[str] | None = None
     ):
         self.save_path = save_path
         self.plot_type = plot_type
+        self.metrics_logged = metrics_logged
+
+        if self.metrics_logged is not None:
+            if 'epoch' not in self.metrics_logged:
+                self.metrics_logged.append('epoch')
+            if any(m not in metrics for m in self.metrics_logged):
+                raise ValueError(f"The specified metrics: {self.metrics_logged} to log are not all present in the metrics dictionary: {metrics}.")
+            
+            metrics = {k: v for k, v in metrics.items() if k in self.metrics_logged}
         
         self._init_histories(metrics)
-
+        
+        
     def _init_histories(self, metrics: Dict[str, float]):
         self.metrics = list(metrics.keys())
         self.train_history = {name: [] for name in self.metrics}
@@ -137,11 +148,12 @@ class History(Helper):
         self._plot_history()
 
     @staticmethod
-    def _log_history(curr_history: Dict[str, List[float]], metrics: Dict[str, float]):
+    def _log_history(curr_history: Dict[str, List[float]], metrics: Dict[str, float]) -> tuple[Dict[str, List[float]], str]:
         log_string = ""
         for metric_name, metric_value in metrics.items():
-            curr_history[metric_name].append(metric_value)  # Debug print
-            log_string += f"--- {metric_name}: {metric_value:.4f}"
+            if metric_name in curr_history:
+                curr_history[metric_name].append(metric_value)  # Debug print
+                log_string += f"--- {metric_name}: {metric_value:.4f}"
 
         return curr_history, log_string
 
@@ -233,7 +245,8 @@ class HelperHandler:
                     helper_instance = History(
                         save_path=self.trainer.config.helpers.history_plot.save_path,
                         plot_type=self.trainer.config.helpers.history_plot.plot_type,
-                        metrics=self.trainer.metrics_handler.metrics_eval
+                        metrics=self.trainer.metrics_handler.metrics_eval,
+                        metrics_logged=self.trainer.config.helpers.history_plot.metrics_logged
                     )
                 case "reduce_lr_on_plateau":
                     helper_instance = LRScheduler(

@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field, field_validator, ConfigDict, model_valida
 from torch.utils.data import DataLoader
 from torch import nn, optim, cuda
 from torch import device as torchdevice
-from typing import Optional, Literal, List, Any, Union
+from typing import Optional, Literal, List, Any, Set, Union
 from packages.train.metrics import TorchMetric, RMSE, MSE, MAE, AxisCorrelation
 from packages.train.loss import TorchLoss, TorchMSELoss, TorchL1Loss, SequenceVQVAELoss, VQAE23Loss
 from packages.models.vqae_skip import SequenceVQAE as SequenceVQAE_Skip
@@ -13,7 +13,7 @@ from packages.models.test_models import SimpleVQVAE, SimpleAutoencoder
 from packages.data_objects.dataset import TorchDataset, TestTorchDataset
 from enum import Enum
 import json
-
+from pprint import pprint
 
 
 
@@ -168,6 +168,16 @@ class PlotType(str, Enum):
 class HistoryPlotSchema(BaseModel):
     plot_type: PlotType = Field(default=PlotType.TIGHT, description="Type of plot for training history")
     save_path: Optional[str] = Field(default='./training_history', description="Path to save the training history plots")
+    metrics_logged: Optional[List[str]] = Field(default=None, description="List of UNIQUE metric names to plot. If None, all metrics are plotted.")
+    @field_validator('metrics_logged')
+    @classmethod
+    def check_metrics_logged_set(cls, v):
+        if v is None:
+            return v
+        if len(v) != len(set(v)):
+            raise ValueError("metrics_logged must contain unique values (no duplicates)")
+        return v
+
 
 class EarlyStoppingSchema(BaseModel):
     patience: int = Field(default=30, gt=0, description="Number of epochs with no improvement after which training will be stopped")
@@ -274,3 +284,9 @@ def load_config(path: str) -> TrainerConfig:
         config_dict = json.load(f)
     return TrainerConfig(**config_dict)
     
+if __name__ == "__main__":
+    # Example usage
+    config = TrainerConfig()
+    save_config(config, "trainer_config_example.json")
+    loaded_config = load_config("trainer_config_example.json")
+    pprint(loaded_config.model_dump(), indent=3)

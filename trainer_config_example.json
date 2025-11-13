@@ -1,0 +1,87 @@
+{
+  "model": {
+    "model_type": "vqvae",
+    "model_kwargs": {}
+  },
+  "dataset": {
+    "dataset_type": "torch_dataset",
+    "dataset_args": {},
+    "data_loader": {
+      "set_sizes": {
+        "train": 0.6,
+        "val": 0.2,
+        "test": 0.2
+      },
+      "batch_size": 32,
+      "norm_axes": null,
+      "target_norm_axes": null
+    }
+  },
+  "loss": {
+    "loss_type": "mse",
+    "loss_kwargs": {}
+  },
+  "optimizer": {
+    "type": "adam",
+    "lr": 0.001,
+    "asym_lr": null,
+    "weight_decay": 0.0001
+  },
+  "gradient_control": {
+    "grad_clip": 1.0,
+    "use_amp": false
+  },
+  "train_loop": {
+    "epochs": 50,
+    "runtime_validation": false
+  },
+  "helpers": {
+    "history_plot": {
+      "plot_type": "tight",
+      "save_path": "./training_history",
+      "metrics_logged": null
+    },
+    "early_stopping": {
+      "patience": 30,
+      "min_delta": 0.0,
+      "metric": "loss",
+      "mode": "min"
+    },
+    "backup_manager": {
+      "backup_interval": 10,
+      "backup_path": "./model_backups",
+      "metric": "loss",
+      "mode": "min"
+    },
+    "reduce_lr_on_plateau": {
+      "mode": "min",
+      "patience": 20,
+      "factor": 0.1
+    },
+    "gradient_logger": {
+      "interval": null
+    }
+  },
+  "info": {
+    "metrics": [],
+    "metrics_args": null
+  },
+  "device": "cpu",
+  "sanity_check": {
+    "set_sizes": {
+      "train": 0.6,
+      "val": 0.2,
+      "test": 0.2
+    },
+    "epochs": 5,
+    "enabled": false,
+    "nsamples": 10,
+    "shape": [
+      25,
+      7,
+      5,
+      250
+    ]
+  },
+  "seed": null
+}
