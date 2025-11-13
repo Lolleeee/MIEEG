@@ -8,10 +8,10 @@ from packages.train.trainer_config_schema import (
     OptimizerType,
     LossType,
     ModelType,
-    MetricType
+    MetricType,
+    CustomPlotTypes
 )
 from packages.train.training import Trainer
-
 from packages.models.vqae_23 import VQVAEConfig
 
 @dataclass
@@ -29,7 +29,7 @@ class Config(VQVAEConfig):
     # Encoder parameters
     encoder_2d_channels: list = None   # [32, 64] - 2D conv channels
     encoder_3d_channels: list = None   # [64, 128, 256] - 3D conv channels
-    embedding_dim: int = 128           # Final embedding dimension
+    embedding_dim: int = 16           # Final embedding dimension
     
     # VQ parameters
     codebook_size: int = 512           # Number of codebook vectors
@@ -48,17 +48,18 @@ config = {
         }
     },
     'dataset': {
-        'dataset_type': DatasetType.TORCH_DATASET,
+        'dataset_type': DatasetType.TEST_TORCH_DATASET,
         'dataset_args': {
-            'root_folder': 'scripts/test_output/EEG+Wavelet',
+            'root_folder': '/media/lolly/SSD/WAYEEGGAL_dataset/0.69subset_250_eeg_wav',
+            'nsamples': 256,
         },
         'data_loader': {
             'set_sizes': {
-                'train': 0.2,
+                'train': 0.6,
                 'val': 0.2,
-                'test': 0.6
+                'test': 0.2
             },
-            'batch_size': 16,
+            'batch_size': 32,
             'norm_axes': (0, 4),
             'target_norm_axes': (0, 2)
         }
@@ -68,7 +69,7 @@ config = {
         'loss_kwargs': {}
     },
     'optimizer': {
-        'type': OptimizerType.ADAM,
+        'type': OptimizerType.ADAMW,
         'lr': 0.001,
         'asym_lr': None,
         'weight_decay': 0.0001
@@ -78,7 +79,7 @@ config = {
         'use_amp': False
     },
     'train_loop': {
-        'epochs': 1000,
+        'epochs': 100,
         'runtime_validation': False
     },
     'helpers': {
@@ -95,10 +96,15 @@ config = {
         },
         'backup_manager': None,
         'reduce_lr_on_plateau': None,
-        'gradient_logger': None#{'interval': 1}
+        'gradient_logger': None, #{'interval': 1}
+        'custom_plotter': {
+            'plot_function': CustomPlotTypes.RECONSTRUCTIONS,
+            'plot_function_args': {},
+            'plot_interval': 9999
+        }
     },
     'info': {
-        'metrics': [MetricType.MAE, MetricType.MSE],
+        'metrics': [MetricType.MSE],
         'metrics_args': None,
 
     },
@@ -110,7 +116,7 @@ config = {
             'test': 0.6
         },
         'epochs': 10,
-        'enabled': True,
+        'enabled': False,
         'nsamples': 10,
         'shape': (25, 7, 5, 250)  # (
     },

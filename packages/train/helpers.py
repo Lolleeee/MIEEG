@@ -5,7 +5,7 @@ from typing import Callable, Dict, Set
 
 import matplotlib.pyplot as plt
 import torch
-
+import copy
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from packages.plotting import train_plots
 from packages.train.metrics import TorchMetric
@@ -144,7 +144,7 @@ class History(Helper):
         logging.info("Validation" + log_string)
 
     def _end_train_step(self):
-
+        
         self._plot_history()
 
     @staticmethod
@@ -152,9 +152,9 @@ class History(Helper):
         log_string = ""
         for metric_name, metric_value in metrics.items():
             if metric_name in curr_history:
-                curr_history[metric_name].append(metric_value)  # Debug print
+                curr_history[metric_name].append(metric_value) 
                 log_string += f"--- {metric_name}: {metric_value:.4f}"
-
+        
         return curr_history, log_string
 
     def _plot_history(self):
@@ -207,7 +207,19 @@ class LRScheduler(Helper):
             self._last_lr = self.scheduler.get_last_lr()[0]
             logging.info(f"Updated Learning Rate: {self.scheduler.get_last_lr()[0]:.6f}")
 
+class CustomPlotter(Helper):
+    def __init__(self, trainer: "Trainer", plot_function: Callable, plot_function_args: dict, plot_interval: int):
+        self.trainer = trainer
+        self.plot_function = plot_function
+        self.plot_function_args = plot_function_args
+        self.plot_interval = plot_interval
+        self.counter = 0
+        
 
+    def _end_train_epoch_step(self, **kwargs):
+        self.counter += 1
+        if self.counter % self.plot_interval == 0:
+            self.plot_function(trainer=self.trainer, **self.plot_function_args)
 
 
 class HelperHandler:
@@ -218,11 +230,13 @@ class HelperHandler:
     def _call_end_train_epoch_step(self, metrics):
         for helper_instance in self.helpers.values():
             if hasattr(helper_instance, '_end_train_epoch_step'):
+                metrics = copy.deepcopy(metrics)
                 helper_instance._end_train_epoch_step(**metrics)
 
     def _call_end_val_step(self, metrics):
         for helper_instance in self.helpers.values():
             if hasattr(helper_instance, '_end_val_step'):
+                metrics = copy.deepcopy(metrics)
                 helper_instance._end_val_step(**metrics)
 
     def _call_end_train_step(self):
@@ -275,7 +289,13 @@ class HelperHandler:
                         metric=self.trainer.config.helpers.early_stopping.metric,
                         mode=self.trainer.config.helpers.early_stopping.mode
                     )
-
+                case "custom_plotter":
+                    helper_instance = CustomPlotter(
+                        trainer=self.trainer,
+                        plot_function=self.trainer.config.helpers.custom_plotter.get_plot_function,
+                        plot_function_args=self.trainer.config.helpers.custom_plotter.plot_function_args,
+                        plot_interval=self.trainer.config.helpers.custom_plotter.plot_interval
+                    )
                 case _:
                     logging.warning(f"Unknown helper: {helper_name}, skipping initialization.")
                 

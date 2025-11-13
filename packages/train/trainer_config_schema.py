@@ -14,10 +14,12 @@ from packages.data_objects.dataset import TorchDataset, TestTorchDataset
 from enum import Enum
 import json
 from pprint import pprint
-
+from packages.plotting.trainer_custom_plots import plot_raweeg_reconstruction 
 
 
 # ===== String-based Enums =====
+class CustomPlotTypes(str, Enum):
+    RECONSTRUCTIONS = "reconstructions"
 
 class ModelType(str, Enum):
     SEQUENCE_VQAE_SKIP = "sequence_vqae_skip"
@@ -58,7 +60,9 @@ class MetricType(str, Enum):
 
 
 # ===== Mapping Dictionaries =====
-
+CUSTOM_PLOTS_MAP = {
+    CustomPlotTypes.RECONSTRUCTIONS: plot_raweeg_reconstruction,
+}
 MODEL_MAP = {
     ModelType.VQVAE: VQVAE,
     ModelType.SEQUENCE_VQAE_SKIP: SequenceVQAE_Skip,
@@ -199,6 +203,16 @@ class ReduceLROnPlateauSchema(BaseModel):
 class GradientLoggerSchema(BaseModel):
     interval: Optional[int] = Field(default=None, gt=0, description="Interval (in epochs) to log gradient norms. If None, logging is disabled.")
 
+class CustomPlotterSchema(BaseModel):
+    plot_function: CustomPlotTypes = Field(default=CustomPlotTypes.RECONSTRUCTIONS, description="Type of custom plot to generate")
+    plot_function_args: dict = Field(default_factory=dict, description="Arguments to pass to the custom plot function")
+    plot_interval: int = Field(default=10, gt=0, description="Interval (in epochs) to generate custom plots")
+
+    @property
+    def get_plot_function(self):
+        """Returns the actual plot function"""
+        return CUSTOM_PLOTS_MAP[self.plot_function]
+    
 # TODO Add Model output keys validation maybe?
 class Helpers(BaseModel):
     history_plot: Optional[HistoryPlotSchema] = Field(default_factory=HistoryPlotSchema)
@@ -206,6 +220,7 @@ class Helpers(BaseModel):
     backup_manager: Optional[BackupManagerSchema] = Field(default_factory=BackupManagerSchema)
     reduce_lr_on_plateau: Optional[ReduceLROnPlateauSchema] = Field(default_factory=ReduceLROnPlateauSchema)
     gradient_logger: Optional[GradientLoggerSchema] = Field(default_factory=GradientLoggerSchema)
+    custom_plotter: Optional[CustomPlotterSchema] = Field(default_factory=CustomPlotterSchema)
 
 class GradientControl(BaseModel):
     grad_clip: Optional[float] = Field(default=1.0, gt=0.0, description="Maximum gradient norm for clipping. If None, no clipping is applied.")

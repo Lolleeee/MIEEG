@@ -6,7 +6,7 @@ import torch.nn as nn
 from typing import Dict, Union, Tuple, Any, List
 from abc import abstractmethod
 import logging
-from packages.train.torch_wrappers import TorchLoss
+from packages.train.F_torch_wrappers import TorchLoss
 
 
 logging.basicConfig(level=logging.INFO)
