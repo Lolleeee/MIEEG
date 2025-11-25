@@ -2,6 +2,7 @@ import glob
 import os
 import re
 from typing import Any, Callable, Dict, List, Union, Tuple
+import h5py
 from scipy.io import loadmat
 import numpy as np
 import scipy.io as sio
@@ -173,11 +174,13 @@ class TorchDataset(Dataset, BasicDataset):
         self,
         root_folder: str,
         unpack_func: Callable = None,
+        augmentation_func: Callable = None
 
     ):
         BasicDataset.__init__(self, root_folder, unpack_func)
         self._norm_params = None
         self._target_norm_params = None
+        self._augmentation_func = None
 
     def __getitem__(self, idx):
         data = BasicDataset.__getitem__(self, idx)
@@ -188,8 +191,11 @@ class TorchDataset(Dataset, BasicDataset):
         if self._target_norm_params is not None and 'target' in data:
             data['target'] = self._normalize_item(data['target'], is_target=True)
 
+        if self._augmentation_func is not None:
+            data = self._augmentation_func(data)
+        
         return data
-
+    
     def _normalize_item(self, item, is_target=False):
         if is_target:
             mean = self._target_norm_params[0]  
@@ -250,3 +256,68 @@ class TestTorchDataset(TorchDataset):
             return data.float()
         else:
             return super().__getitem__(idx)
+        
+
+# PyTorch Dataset for Training (Works locally AND Kaggle)
+class H5Dataset(Dataset):
+    def __init__(self, h5_path):
+        """
+        Efficient loader that reads directly from disk without loading full file to RAM.
+        """
+        self.h5_path = h5_path
+        self.h5_file = None
+        
+        # quick check of length
+        with h5py.File(h5_path, 'r') as f:
+            if 'tensor' not in f:
+                raise ValueError("Not a valid Kaggle-optimized HDF5 file (missing 'tensor')")
+            self.length = f['tensor'].shape[0]
+            
+    def __len__(self):
+        return self.length
+    
+    def __getitem__(self, idx):
+        # Open file lazily (required for multi-worker DataLoader)
+        if self.h5_file is None:
+            self.h5_file = h5py.File(self.h5_path, 'r')
+            
+        # Load specific sample - HDF5 handles the chunk reading efficiently
+        # This only reads the necessary chunk, not the whole file
+        # TODO Make it compatible with unpack function
+        tensor = torch.from_numpy(self.h5_file['tensor'][idx]).float()
+        eeg = torch.from_numpy(self.h5_file['eeg'][idx]).float()
+        
+        return {
+            'input': tensor,  # (2, 30, 7, 5, 80)
+            'target': eeg         # (32, 80)
+        }
+    
+    def __del__(self):
+        if self.h5_file is not None:
+            self.h5_file.close()
+
+class TorchH5Dataset(H5Dataset):
+    def __init__(
+        self,
+        h5_path: str,
+        augmentation_func: Callable = None
+
+    ):
+        super().__init__(h5_path)
+        self._norm_params = None
+        self._target_norm_params = None
+        self._augmentation_func = augmentation_func
+
+    def __getitem__(self, idx):
+        data = super().__getitem__(idx)
+
+        if self._norm_params is not None:
+            data['input'] = self._normalize_item(data['input'])
+
+        if self._target_norm_params is not None and 'target' in data:
+            data['target'] = self._normalize_item(data['target'], is_target=True)
+
+        if self._augmentation_func is not None:
+            data = self._augmentation_func(data)
+        
+        return data

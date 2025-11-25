@@ -11,11 +11,11 @@ class VQVAEConfig:
     use_quantizer: bool = True  # Whether to use vector quantization
     # Data shape parameters
     num_freq_bands: int = 25          # F: Number of frequency bands
-    spatial_rows: int = 8              # R: Spatial grid rows
-    spatial_cols: int = 8              # C: Spatial grid cols
+    spatial_rows: int = 7              # R: Spatial grid rows
+    spatial_cols: int = 5              # C: Spatial grid cols
     time_samples: int = 250            # T: Time samples per clip
     chunk_dim: int = 50                # ChunkDim: Time chunk length
-    orig_channels: int = 64            # Original EEG channels (R*C or separate)
+    orig_channels: int = 32            # Original EEG channels (R*C or separate)
     
     # Encoder parameters
     encoder_2d_channels: list = None   # [32, 64] - 2D conv channels
@@ -38,11 +38,11 @@ class VQVAEConfig:
     
     def __post_init__(self):
         if self.encoder_2d_channels is None:
-            self.encoder_2d_channels = [32, 64]
+            self.encoder_2d_channels = [8, 16]
         if self.encoder_3d_channels is None:
-            self.encoder_3d_channels = [64, 128, 256]
+            self.encoder_3d_channels = [16, 64, 128]
         if self.decoder_channels is None:
-            self.decoder_channels = [256, 128, 64]
+            self.decoder_channels = [64, 32, 16]
         
         # Calculate number of chunks
         self.num_chunks = self.time_samples // self.chunk_dim
@@ -156,7 +156,7 @@ class VectorQuantizer(nn.Module):
             'codebook_loss': q_latent_loss,
             'perplexity': perplexity
         }
-        
+        print(encoding_indices.unique())
         return quantized, encoding_indices, loss_dict
     
     def _ema_update(self, flat_input: torch.Tensor, encoding_indices: torch.Tensor):
@@ -349,7 +349,7 @@ class Decoder(nn.Module):
                 nn.ConvTranspose1d(
                     in_channels,
                     out_channels,
-                    kernel_size=4,
+                    kernel_size=3,
                     stride=2,
                     padding=1
                 ),
@@ -555,3 +555,23 @@ class VQAE(nn.Module):
         x = x.reshape(batch_size, C, nChunk * ChunkDim)
         
         return x
+    
+
+if __name__ == "__main__":
+    # Simple test of VQAE model
+    config = VQVAEConfig()
+    model = VQAE(config)
+    
+    # Dummy input: batch size 2, F=25, R=8, C=8, T=250
+    x = torch.randn(2, config.num_freq_bands, config.spatial_rows, config.spatial_cols, config.time_samples)
+    
+    outputs = model(x)
+    recon = outputs['reconstruction']
+    print(f"Input shape: {x.shape}")
+    print(f"Reconstructed shape: {recon.shape}")
+    print(model)
+    # Count total parameters
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total parameters: {total_params:,}")
+    print(f"Trainable parameters: {trainable_params:,}")

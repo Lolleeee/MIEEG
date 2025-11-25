@@ -81,3 +81,19 @@ def calculate_global_normalization_params(data_loader: Iterator, ) -> Dict[str, 
         means.append(np.mean(data))
         stds.append(np.std(data))
     return {"mean": np.mean(means), "std": np.mean(stds)}
+
+def get_magnitude_and_phase(Signal: SignalObject) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Extract magnitude and phase from complex-valued signal.
+
+    Args:
+        Signal: SignalObject with complex-valued signal
+
+    Returns:
+        Tuple of (magnitude, phase) arrays
+    """
+    magnitude = np.abs(Signal.signal)
+    phase = np.angle(Signal.signal)
+    Signal.signal = np.stack((magnitude, phase), axis=0)  # First dimension: 0 - magnitude, 1 - phase
+    Signal._insert_in_dims_dict(["complex"], [0])
+    return Signal

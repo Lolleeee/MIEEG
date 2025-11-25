@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import List, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import pywt
@@ -12,6 +12,7 @@ def eeg_wavelet_transform(
     bandwidth: Tuple[float, float],
     wavelet: str = "cmor1.5-1.0",
     freq_samples: int = None,
+    freqs: np.ndarray = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Perform Continuous Wavelet Transform (CWT) on the input EegSignal using the specified wavelet.
@@ -39,7 +40,7 @@ def eeg_wavelet_transform(
     if freq_samples is None:
         freq_samples = bandwidth_max - bandwidth_min + 1
 
-    scales = _compute_scales(wavelet, fs, bandwidth_min, bandwidth_max, freq_samples)
+    scales = _compute_scales(wavelet, fs, bandwidth_min, bandwidth_max, freq_samples, freqs=freqs)
 
     # Spatial Multichannel case
     if Signal.is_spatial_signal:
@@ -135,8 +136,14 @@ def _validate_signal(Signal: SignalObject) -> None:
 
 # MARK: Helper Functions
 @lru_cache(maxsize=4)
-def _compute_scales(wavelet, fs, bandwidth_min, bandwidth_max, num_samples):
-    frequencies = np.linspace(bandwidth_min, bandwidth_max, num=num_samples)
+def _compute_scales(wavelet: str, fs: float, bandwidth_min: float, 
+                          bandwidth_max: float, num_samples: int, 
+                          freqs: Optional[Tuple[float, ...]] = None):
+    """Cached version that only accepts tuples."""
+    if freqs is not None:
+        frequencies = np.array(freqs)
+    else:
+        frequencies = np.linspace(bandwidth_min, bandwidth_max, num=num_samples)
     return pywt.frequency2scale(wavelet, frequencies / fs)
 
 

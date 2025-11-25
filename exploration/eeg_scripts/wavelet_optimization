@@ -1,0 +1,3 @@
+import numpy as np
+tensor = np.load("scripts/test_output/super_freq_res/patient1_trial289.npz")
+print(tensor['tensor'].shape)

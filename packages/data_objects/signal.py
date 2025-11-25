@@ -358,6 +358,7 @@ class EegSignal(SignalObject):
         FREQUENCIES = "frequencies"
         TIME = GLOBAL_DIM_KEYS.TIME.value
         EPOCHS = GLOBAL_DIM_KEYS.EPOCHS.value
+        COMPLEX = "complex"
 
     @classmethod
     def random(

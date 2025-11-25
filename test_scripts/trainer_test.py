@@ -17,33 +17,33 @@ from packages.models.vqae_23 import VQVAEConfig
 @dataclass
 class Config(VQVAEConfig):
     """Configuration for the VQ-VAE model."""
-    use_quantizer: bool = False  # Whether to use vector quantization
+    use_quantizer: bool = True  # Whether to use vector quantization
     # Data shape parameters
     num_freq_bands: int = 25          # F: Number of frequency bands
     spatial_rows: int = 7              # R: Spatial grid rows
     spatial_cols: int = 5              # C: Spatial grid cols
     time_samples: int = 250            # T: Time samples per clip
-    chunk_dim: int = 25                # ChunkDim: Time chunk length
+    chunk_dim: int = 50                # ChunkDim: Time chunk length
     orig_channels: int = 32            # Original EEG channels (R*C or separate)
     
     # Encoder parameters
     encoder_2d_channels: list = None   # [32, 64] - 2D conv channels
     encoder_3d_channels: list = None   # [64, 128, 256] - 3D conv channels
-    embedding_dim: int = 16           # Final embedding dimension
+    embedding_dim: int = 32           # Final embedding dimension
     
     # VQ parameters
-    codebook_size: int = 512           # Number of codebook vectors
-    commitment_cost: float = 0.25      # Beta for commitment loss
-    ema_decay: float = 0.99            # EMA decay for codebook updates
+    codebook_size: int = 16           # Number of codebook vectors
+    commitment_cost: float = 0.5      # Beta for commitment loss
+    ema_decay: float = 0.9            # EMA decay for codebook updates
     epsilon: float = 1e-5              # Small constant for numerical stability
     
     # Decoder parameters
     decoder_channels: list = None
 
-    dropout_2d: float = 0.1          # Dropout for 2D encoder
-    dropout_3d: float = 0.1          # Dropout for 3D encoder
-    dropout_bottleneck: float = 0.2  # Dropout at bottleneck
-    dropout_decoder: float = 0.1     # Dropout for decoder
+    dropout_2d: float = 0          # Dropout for 2D encoder
+    dropout_3d: float = 0          # Dropout for 3D encoder
+    dropout_bottleneck: float = 0  # Dropout at bottleneck
+    dropout_decoder: float = 0     # Dropout for decoder
     
 
 config = {
@@ -54,10 +54,10 @@ config = {
         }
     },
     'dataset': {
-        'dataset_type': DatasetType.TEST_TORCH_DATASET,
+        'dataset_type': DatasetType.H5_DATASET,
         'dataset_args': {
             'root_folder': '/media/lolly/SSD/WAYEEGGAL_dataset/0.69subset_250_eeg_wav',
-            'nsamples': 256,
+            'nsamples': 25,
         },
         'data_loader': {
             'set_sizes': {

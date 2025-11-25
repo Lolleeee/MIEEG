@@ -11,6 +11,15 @@ SPATIAL_DOMAIN_MATRIX_32 = np.array(
         ["PO9", "O1", "Oz", "O2", "PO10"],
     ]
 )
+CHANNELS_32 = [
+    'Fp1', 'Fp2',           # Frontal pole
+    'F7', 'F3', 'Fz', 'F4', 'F8',  # Frontal
+    'FC5', 'FC1', 'FC2', 'FC6',    # Frontal-central
+    'T7', 'C3', 'Cz', 'C4', 'T8',  # Central/temporal
+    'TP9', 'CP5', 'CP1', 'CP2', 'CP6', 'TP10',  # Central-parietal/temporal-parietal
+    'P7', 'P3', 'Pz', 'P4', 'P8',  # Parietal
+    'PO9', 'O1', 'Oz', 'O2', 'PO10'  # Parietal-occipital/occipital
+]
 
 CHANNELS_32 = np.array(
     [
@@ -50,21 +59,15 @@ CHANNELS_32 = np.array(
 )
 
 
+
 if __name__ == "__main__":
     matrix = SPATIAL_DOMAIN_MATRIX_32
     import torch
-    shape = matrix.shape
-    num = shape[0] * shape[1]
-    matrix_tensor = torch.arange(num, dtype=torch.float32).reshape(shape)
-    combined_channels = matrix_tensor.reshape(matrix_tensor.shape[0] * matrix_tensor.shape[1]) 
-    print(matrix_tensor)
-    print(combined_channels)
 
-    x = np.load("/home/lolly/Projects/MIEEG/test/test_output/TEST_SAMPLE_FOLDER/TEST_SAMPLE2 (Copy).npz")
-    x = x['data']
-    x = torch.Tensor(x)
-    from packages.plotting.reconstruction_plots import plot_reconstruction_slices
-    x = x[:,:,:, 32:64]
-    print(x.shape)
-    plot_reconstruction_slices(x, x, n_channels=6)
+    new_order_indices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 13, 9, 10, 11, 12, 18, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+    
+    row_chan = CHANNELS_32[new_order_indices]
+    matrix = row_chan.reshape(matrix.shape)
+    print(matrix)
+
     

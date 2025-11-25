@@ -244,14 +244,14 @@ def plot_frequency_temporal_correlation_summary(
     plt.colorbar(im1, ax=ax1)
     
     # Add text annotations
-    for i in range(n_freq):
-        for j in range(n_freq):
-            if np.isnan(avg_corr[i, j]):
-                ax1.text(j, i, 'N/A', ha='center', va='center', color='gray', fontsize=10)
-            else:
-                text_color = 'white' if abs(avg_corr[i, j]) > 0.5 else 'black'
-                ax1.text(j, i, f'{avg_corr[i, j]:.2f}',
-                        ha='center', va='center', color=text_color, fontsize=10)
+    # for i in range(n_freq):
+    #     for j in range(n_freq):
+    #         if np.isnan(avg_corr[i, j]):
+    #             ax1.text(j, i, 'N/A', ha='center', va='center', color='gray', fontsize=10)
+    #         else:
+    #             text_color = 'white' if abs(avg_corr[i, j]) > 0.5 else 'black'
+    #             ax1.text(j, i, f'{avg_corr[i, j]:.2f}',
+    #                     ha='center', va='center', color=text_color, fontsize=10)
     
     # Plot 2: Spatial map of average correlation strength
     channel_corr_strength = np.full((n_row, n_col), np.nan)
@@ -953,34 +953,36 @@ if __name__ == "__main__":
     import torch
     import sys
     # Load your data
-    tensor = np.load('scripts/test_output/sample_000000.npz')['data']
-
-    # 3. Summary across all frequencies
-    plot_temporal_instantaneous_correlation_summary(
-        tensor,
-        time_labels=[f"T{i}" for i in range(tensor.shape[-1])]
-    )
-
+    tensor = np.load("scripts/test_output/super_freq_res/patient1_trial289.npz")['tensor'] # shape (freq, row, col, time)
+    # Print tensor stats
+    
+    print(f"Tensor shape: {tensor.shape}, dtype: {tensor.dtype}, min: {tensor.min()}, max: {tensor.max()}, mean: {tensor.mean():.4f}, std: {tensor.std():.4f}")
     sys.exit(0)
-    plot_frequency_temporal_correlation_summary(tensor)
-    sys.exit(0)
-
     # Define your frequency selection
-    selected_freqs = list(range(0, 25, 2))
+    tensor = torch.tensor(tensor).permute(2, 0, 1, 3)  # to (freq, row, col, time)
+    selected_freqs = list(range(1, 15))
 
+    # Plot summary of frequency correlations across all channels
+    plot_frequency_temporal_correlation_summary(
+        tensor,
+        skip_constant=True
+    )
     # Analyze information loss
     results = analyze_frequency_selection_information_loss(
         tensor,
         selected_freqs,
         method='all'  # Can be 'variance', 'energy', or 'all'
     )
-
+    
+    sys.exit(0)
     # Compare different selection strategies
     selection_configs = {
-        'Every 5th': list(range(0, 25, 5)),
-        'First 5': list(range(5)),
-        'Last 5': list(range(20, 25)),
-        'Optim': list(range(0, 25, 3)),  # Example
+        '1': range(1, 25),
+        '2': range(2, 25),
+        '3': range(1, 20),
+        '4': range(1, 15),
+        '5': range(2, 15),
+        '6': range(3, 15),
     }
 
     compare_frequency_selections(tensor, selection_configs)

@@ -54,7 +54,7 @@ def reshape_to_spatial(
     - SignalObject with signal = numpy array reshaped to spatial configuration
 
     Notes:
-
+    - Preserves complex signals (keeps both real and imaginary parts)
     """
     current_schema = Signal.electrode_schema
     rows_key = Signal.DIM_DICT_KEYS.ROWS.value
@@ -71,6 +71,7 @@ def reshape_to_spatial(
         )
 
     is_spatial = Signal.is_spatial_signal
+    is_complex = np.iscomplexobj(Signal.signal)
 
     if spatial_domain_matrix.ndim == 2:
         order = [rows_key, cols_key] if is_spatial else [channels_key]
@@ -83,7 +84,8 @@ def reshape_to_spatial(
             if is_spatial
             else (num_rows, num_cols) + original_shape[1:]
         )
-        reshaped_signal = np.zeros(new_shape)
+        dtype = Signal.signal.dtype if is_complex else np.float64
+        reshaped_signal = np.zeros(new_shape, dtype=dtype)
 
         for r in range(num_rows):
             for c in range(num_cols):
@@ -118,7 +120,8 @@ def reshape_to_spatial(
             if is_spatial
             else (num_electrodes,) + original_shape[1:]
         )
-        reshaped_signal = np.zeros(new_shape)
+        dtype = Signal.signal.dtype if is_complex else np.float64
+        reshaped_signal = np.zeros(new_shape, dtype=dtype)
 
         for c in range(num_electrodes):
             electrode = spatial_domain_matrix[c]
@@ -176,7 +179,7 @@ def _validate_segmentation_params(
 def segment_signal(
     Signal: Union[SignalObject, MultimodalTimeSignal],
     window: int = 0,
-    overlap: float = 0,
+    overlap: int = 0,
 ) -> SignalObject:
     """
     Batch EEG data into smaller segments for processing.

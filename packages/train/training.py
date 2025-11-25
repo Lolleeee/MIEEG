@@ -51,7 +51,6 @@ class MetricsHandler:
         self.epoch_samples_count += target.size(0)
 
         batch_loss_eval_dict = self.loss(outputs, batch)
-        
         # Main loss value to be backpropagated
         loss_eval = batch_loss_eval_dict['loss']
         
@@ -202,7 +201,8 @@ class Trainer():
             sets_size=self.config.dataset.data_loader.set_sizes.model_dump(),
             batch_size=self.config.dataset.data_loader.batch_size,
             norm_axes=self.config.dataset.data_loader.norm_axes,
-            target_norm_axes=self.config.dataset.data_loader.target_norm_axes
+            target_norm_axes=self.config.dataset.data_loader.target_norm_axes,
+            augmentation_func=self.config.dataset.data_loader.get_augmentation_class
         )
 
     def _components_runtime_validation_setup(self):
@@ -319,7 +319,7 @@ class Trainer():
     def _start_val_loop(self):
         
         self.model.eval()
-
+        
         with torch.no_grad():
             for batch in self.val_loader:
                 batch = {k: v.to(self.device) for k, v in batch.items()}

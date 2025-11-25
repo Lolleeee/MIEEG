@@ -10,7 +10,7 @@ from packages.models.vqae_skip import SequenceVQAE as SequenceVQAE_Skip
 from packages.models.vqae import VQVAE
 from packages.models.vqae_23 import VQAE as VQAE23
 from packages.models.test_models import SimpleVQVAE, SimpleAutoencoder
-from packages.data_objects.dataset import TorchDataset, TestTorchDataset
+from packages.data_objects.dataset import H5Dataset, TorchDataset, TestTorchDataset
 from enum import Enum
 import json
 from pprint import pprint
@@ -28,6 +28,7 @@ class ModelType(str, Enum):
     SIMPLE_VQVAE = "simple_vqvae"
     SIMPLE_AE = "simple_ae"
     VQAE23 = "vqae23"
+    COMVQAE23 = "com_vqae23"
 
 class OptimizerType(str, Enum):
     ADAM = "adam"
@@ -50,6 +51,7 @@ class DatasetType(str, Enum):
     """
     TORCH_DATASET = "torch_dataset"
     TEST_TORCH_DATASET = "test_torch_dataset"
+    H5_DATASET = "h5_dataset"
 
 
 class MetricType(str, Enum):
@@ -58,6 +60,9 @@ class MetricType(str, Enum):
     AxisCorrelation = "axis_correlation"
     MSE = "mse"
 
+class AugmentationType(str, Enum):
+    # To be filled with augmentation types
+    PASS = "pass"
 
 # ===== Mapping Dictionaries =====
 CUSTOM_PLOTS_MAP = {
@@ -86,6 +91,7 @@ LOSS_MAP = {
 DATASET_MAP = {
     DatasetType.TORCH_DATASET: TorchDataset,
     DatasetType.TEST_TORCH_DATASET: TestTorchDataset,
+    DatasetType.H5_DATASET: H5Dataset,
 }
 
 METRIC_MAP = {
@@ -95,6 +101,9 @@ METRIC_MAP = {
     MetricType.MSE: MSE,
 }
 
+AUGMENTATION_MAP = {
+    # To be filled with augmentation classes
+}
 
 # ===== Config Classes =====
 
@@ -116,7 +125,13 @@ class DataLoaderConfig(BaseModel):
     batch_size: int = Field(default=32, gt=0)
     norm_axes: Optional[List[int]] = Field(default=None, description="Axes to normalize model input over")
     target_norm_axes: Optional[List[int]] = Field(default=None, description="Axes to normalize target over")
+    augmentation: Optional[AugmentationType] = Field(default=AugmentationType.PASS, description="Type of data augmentation to apply")
 
+    @property
+    def get_augmentation_class(self):
+        """Returns the actual augmentation class"""
+        return AUGMENTATION_MAP.get(self.augmentation, None)
+    
 class DatasetConfig(BaseModel):
     dataset_type: DatasetType = Field(default=DatasetType.TORCH_DATASET, description="Type of dataset to use")
     dataset_args: dict = Field(default_factory=dict, description="Arguments to instantiate the dataset")

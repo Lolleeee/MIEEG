@@ -231,6 +231,7 @@ def get_data_loaders(
     target_norm_axes: Tuple[int] = None,
     norm_params: Tuple[float, float] = None,
     target_norm_params: Tuple[float, float] = None,
+    augmentation_func: Callable = None
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     '''
     Create train/val/test data loaders with optional normalization.
@@ -287,8 +288,12 @@ def get_data_loaders(
         if target_norm is not None:
             dataset._target_norm_params = target_norm
             logging.info("Target normalization parameters calculated and stored")
-        
+    
+    
     train_dataset = Subset(dataset, train_idx)
+    if augmentation_func is not None:
+        train_dataset.dataset._augmentation_func = augmentation_func
+
     val_dataset = Subset(dataset, val_idx)
     test_dataset = Subset(dataset, test_idx)
 

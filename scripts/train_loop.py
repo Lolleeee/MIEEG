@@ -39,10 +39,10 @@ class Config(VQVAEConfig):
 
 model = VQAE(Config())
 
-dataset = TorchDataset(root_folder="scripts/test_output/EEG+Wavelet")
-train_loader, val_loader, test_loader = get_data_loaders(dataset, sets_size={'train': 0.3333, 'val': 0.3333}, batch_size=32, norm_axes=(0,4), target_norm_axes=(0, 2))
+dataset = TorchDataset(root_folder="/media/lolly/SSD/WAYEEGGAL_dataset/0.69subset_250_eeg_wav")
+train_loader, val_loader, test_loader = get_data_loaders(dataset, sets_size={'train': 0.6, 'val': 0.2}, batch_size=32, norm_axes=(0,4), target_norm_axes=(0, 2))
 
-
+sys.exit(0)
 load_dotenv()
 
 criterion = VQAE23Loss(
