@@ -39,10 +39,14 @@ def _calc_norm_params(
     axes: Tuple[int], 
     target_axes: Tuple[int] = None,
     norm_params: Tuple[float, float] | Tuple[torch.Tensor, torch.Tensor] | None = None,
-    target_norm_params: Tuple[float, float] | Tuple[torch.Tensor, torch.Tensor] | None = None
+    target_norm_params: Tuple[float, float] | Tuple[torch.Tensor, torch.Tensor] | None = None,
+    max_samples: int = None,
+    max_batches: int = None,
+    convergence_threshold: float = 1e-4,
+    min_batches: int = 10
 ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor] | None]:
     """
-    Calculate global mean and std using batched Welford's algorithm.
+    Calculate global mean and std using batched Welford's algorithm with early stopping.
     Faster and more memory efficient. Calculates both input and target in single pass.
     
     Args:
@@ -51,6 +55,10 @@ def _calc_norm_params(
         target_axes: Dimensions to calculate mean/std across for 'target'. If None, target not normalized
         norm_params: Pre-computed (mean, std) for input. If None, calculate from data
         target_norm_params: Pre-computed (mean, std) for target. If None, calculate from data
+        max_samples: Maximum number of samples to use for calculation. If None, use all data
+        max_batches: Maximum number of batches to process. If None, use all batches
+        convergence_threshold: Stop if relative change in mean/std is below this threshold
+        min_batches: Minimum number of batches to process before checking convergence
     
     Returns:
         ((input_mean, input_std), (target_mean, target_std) or None)
@@ -63,7 +71,6 @@ def _calc_norm_params(
     assert 'input' in sample_batch, "Expected batch dict to contain 'input' key."
     
     sample_input = sample_batch['input']
-    
     batch_size = sample_input.size(0)
     input_shape = sample_input.shape
     
@@ -73,17 +80,34 @@ def _calc_norm_params(
         sample_target = sample_batch['target']
         target_shape = sample_target.shape
     
+    # Calculate stopping conditions
+    total_batches = len(train_loader)
+    if max_samples is not None:
+        max_batches_from_samples = (max_samples + batch_size - 1) // batch_size
+        max_batches = min(max_batches_from_samples, max_batches) if max_batches else max_batches_from_samples
+    
+    if max_batches is not None:
+        max_batches = min(max_batches, total_batches)
+    else:
+        max_batches = total_batches
+    
+    logging.info(f"Will process at most {max_batches}/{total_batches} batches for normalization")
+    
     # ========== CALCULATE NORMALIZATION PARAMETERS IN SINGLE LOOP ==========
     
     # Input Welford variables
     input_n = 0
     input_mean = None
     input_M2 = None
+    input_prev_mean = None
+    input_prev_std = None
     
     # Target Welford variables
     target_n = 0
     target_mean = None
     target_M2 = None
+    target_prev_mean = None
+    target_prev_std = None
     
     calculate_input = norm_params is None
     calculate_target = has_target and target_norm_params is None
@@ -97,9 +121,17 @@ def _calc_norm_params(
         else:
             desc += " (target only)"
         
-        for batch in tqdm(train_loader, desc=desc):
+        batch_count = 0
+        converged_input = False
+        converged_target = False
+        
+        pbar = tqdm(train_loader, desc=desc, total=max_batches)
+        
+        for batch in pbar:
+            batch_count += 1
+            
             # ===== Process Input =====
-            if calculate_input:
+            if calculate_input and not converged_input:
                 batch_input = batch['input']
                 
                 batch_mean = batch_input.mean(dim=axes)
@@ -117,9 +149,27 @@ def _calc_norm_params(
                     input_mean = (input_n * input_mean + batch_size * batch_mean) / new_n
                     input_M2 = input_M2 + batch_var * batch_size + delta ** 2 * input_n * batch_size / new_n
                     input_n = new_n
+                
+                # Check convergence for input
+                if batch_count >= min_batches and batch_count % 5 == 0:  # Check every 5 batches
+                    current_std = torch.sqrt(input_M2 / input_n)
+                    
+                    if input_prev_mean is not None and input_prev_std is not None:
+                        mean_change = torch.abs(input_mean - input_prev_mean).max().item()
+                        std_change = torch.abs(current_std - input_prev_std).max().item()
+                        
+                        mean_rel_change = mean_change / (torch.abs(input_mean).max().item() + 1e-8)
+                        std_rel_change = std_change / (current_std.max().item() + 1e-8)
+                        
+                        if mean_rel_change < convergence_threshold and std_rel_change < convergence_threshold:
+                            converged_input = True
+                            logging.info(f"Input normalization converged at batch {batch_count}")
+                    
+                    input_prev_mean = input_mean.clone()
+                    input_prev_std = current_std.clone()
             
             # ===== Process Target =====
-            if calculate_target and 'target' in batch:
+            if calculate_target and not converged_target and 'target' in batch:
                 batch_target = batch['target']
                 
                 batch_mean = batch_target.mean(dim=target_axes)
@@ -137,6 +187,42 @@ def _calc_norm_params(
                     target_mean = (target_n * target_mean + batch_size * batch_mean) / new_n
                     target_M2 = target_M2 + batch_var * batch_size + delta ** 2 * target_n * batch_size / new_n
                     target_n = new_n
+                
+                # Check convergence for target
+                if batch_count >= min_batches and batch_count % 5 == 0:
+                    current_std = torch.sqrt(target_M2 / target_n)
+                    
+                    if target_prev_mean is not None and target_prev_std is not None:
+                        mean_change = torch.abs(target_mean - target_prev_mean).max().item()
+                        std_change = torch.abs(current_std - target_prev_std).max().item()
+                        
+                        mean_rel_change = mean_change / (torch.abs(target_mean).max().item() + 1e-8)
+                        std_rel_change = std_change / (current_std.max().item() + 1e-8)
+                        
+                        if mean_rel_change < convergence_threshold and std_rel_change < convergence_threshold:
+                            converged_target = True
+                            logging.info(f"Target normalization converged at batch {batch_count}")
+                    
+                    target_prev_mean = target_mean.clone()
+                    target_prev_std = current_std.clone()
+            
+            # Update progress bar
+            pbar.set_postfix({
+                'samples': input_n if calculate_input else target_n,
+                'input_conv': converged_input if calculate_input else None,
+                'target_conv': converged_target if calculate_target else None
+            })
+            
+            # Early stopping conditions
+            if batch_count >= max_batches:
+                logging.info(f"Reached max_batches limit ({max_batches})")
+                break
+            
+            if (not calculate_input or converged_input) and (not calculate_target or converged_target):
+                logging.info(f"Both input and target converged at batch {batch_count}")
+                break
+        
+        pbar.close()
     
     # ========== FINALIZE INPUT NORMALIZATION ==========
     if calculate_input:
@@ -163,6 +249,7 @@ def _calc_norm_params(
         input_std = input_std.view(*reshape_dims)
         
         logging.info(f"Calculated input mean shape: {input_mean.shape}, std shape: {input_std.shape}")
+        logging.info(f"Used {input_n} samples for input normalization")
     else:
         # Use provided normalization parameters
         if not isinstance(norm_params[0], torch.Tensor):
@@ -201,6 +288,7 @@ def _calc_norm_params(
         target_std = target_std.view(*reshape_dims)
         
         logging.info(f"Calculated target mean shape: {target_mean.shape}, std shape: {target_std.shape}")
+        logging.info(f"Used {target_n} samples for target normalization")
     elif has_target and target_norm_params is not None:
         # Use provided normalization parameters
         if not isinstance(target_norm_params[0], torch.Tensor):
@@ -231,7 +319,11 @@ def get_data_loaders(
     target_norm_axes: Tuple[int] = None,
     norm_params: Tuple[float, float] = None,
     target_norm_params: Tuple[float, float] = None,
-    augmentation_func: Callable = None
+    augmentation_func: Callable = None,
+    max_norm_samples: int = None,  
+    max_norm_batches: int = None,  
+    norm_convergence_threshold: float = 1e-4,  
+    min_norm_batches: int = 10
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     '''
     Create train/val/test data loaders with optional normalization.
@@ -278,7 +370,11 @@ def get_data_loaders(
             axes=norm_axes, 
             target_axes=target_norm_axes,
             norm_params=norm_params,
-            target_norm_params=target_norm_params
+            target_norm_params=target_norm_params,
+            max_samples=max_norm_samples, 
+            max_batches=max_norm_batches,  
+            convergence_threshold=norm_convergence_threshold,  
+            min_batches=min_norm_batches  
         )
 
         # Store in dataset
