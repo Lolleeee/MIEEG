@@ -127,7 +127,10 @@ class DataLoaderConfig(BaseModel):
     norm_axes: Optional[List[int]] = Field(default=None, description="Axes to normalize model input over")
     target_norm_axes: Optional[List[int]] = Field(default=None, description="Axes to normalize target over")
     augmentation: Optional[AugmentationType] = Field(default=AugmentationType.PASS, description="Type of data augmentation to apply")
-
+    max_norm_samples: int = Field(default=None, description="Maximum number of samples to use for normalization calculation")
+    max_norm_batches: int = Field(default=None, description="Maximum number of batches to use for normalization calculation")
+    norm_convergence_threshold: float = Field(default=1e-4, description="Convergence threshold for normalization calculation")
+    min_norm_batches: int = Field(default=10, description="Minimum number of batches to process before checking convergence")
     @property
     def get_augmentation_class(self):
         """Returns the actual augmentation class"""
