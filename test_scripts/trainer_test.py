@@ -12,52 +12,64 @@ from packages.train.trainer_config_schema import (
     CustomPlotTypes
 )
 from packages.train.training import Trainer
-from packages.models.vqae_23 import VQVAEConfig
+from packages.models.vqae_light import VQAELight, VQAELightConfig
 
 @dataclass
-class Config(VQVAEConfig):
+
+@dataclass
+class VQAELightConfig:
     """Configuration for the VQ-VAE model."""
-    use_quantizer: bool = True  # Whether to use vector quantization
+    use_quantizer: bool = False
+    
     # Data shape parameters
-    num_freq_bands: int = 25          # F: Number of frequency bands
-    spatial_rows: int = 7              # R: Spatial grid rows
-    spatial_cols: int = 5              # C: Spatial grid cols
-    time_samples: int = 250            # T: Time samples per clip
-    chunk_dim: int = 50                # ChunkDim: Time chunk length
-    orig_channels: int = 32            # Original EEG channels (R*C or separate)
+    num_input_channels: int = 2   # Power + Phase
+    num_freq_bands: int = 30
+    spatial_rows: int = 7
+    spatial_cols: int = 5
+    time_samples: int = 80        # Fixed time window size
+    orig_channels: int = 32       # Target output channels
     
     # Encoder parameters
-    encoder_2d_channels: list = None   # [32, 64] - 2D conv channels
-    encoder_3d_channels: list = None   # [64, 128, 256] - 3D conv channels
-    embedding_dim: int = 32           # Final embedding dimension
+    encoder_2d_channels: list = None   # [16, 32]
+    encoder_3d_channels: list = None   # [32, 64]
+    embedding_dim: int = 64
     
     # VQ parameters
-    codebook_size: int = 16           # Number of codebook vectors
-    commitment_cost: float = 0.5      # Beta for commitment loss
-    ema_decay: float = 0.9            # EMA decay for codebook updates
-    epsilon: float = 1e-5              # Small constant for numerical stability
+    codebook_size: int = 256
+    commitment_cost: float = 0.25
+    ema_decay: float = 0.99
+    epsilon: float = 1e-5
     
     # Decoder parameters
-    decoder_channels: list = None
+    decoder_channels: list = None      # [64, 32]
+    
+    # Dropout
+    dropout_2d: float = 0.05
+    dropout_3d: float = 0.05
+    dropout_bottleneck: float = 0.1
+    dropout_decoder: float = 0.05
+    
+    # Architecture
+    use_separable_conv: bool = True
+    use_group_norm: bool = True
+    num_groups: int = 8
+    use_residual: bool = True
+    use_squeeze_excitation: bool = True
 
-    dropout_2d: float = 0          # Dropout for 2D encoder
-    dropout_3d: float = 0          # Dropout for 3D encoder
-    dropout_bottleneck: float = 0  # Dropout at bottleneck
-    dropout_decoder: float = 0     # Dropout for decoder
+
     
 
 config = {
     'model': {
-        'model_type': ModelType.VQAE23,
+        'model_type': ModelType.COMVQAE23,
         'model_kwargs': {
-            'config': Config()
+            'config': VQAELightConfig()
         }
     },
     'dataset': {
         'dataset_type': DatasetType.H5_DATASET,
         'dataset_args': {
-            'root_folder': '/media/lolly/SSD/WAYEEGGAL_dataset/0.69subset_250_eeg_wav',
-            'nsamples': 25,
+            'h5_path': 'scripts/test_output/TEST/motor_eeg_dataset.h5',
         },
         'data_loader': {
             'set_sizes': {
@@ -66,7 +78,7 @@ config = {
                 'test': 0.2
             },
             'batch_size': 32,
-            'norm_axes': (0, 4),
+            'norm_axes': (0, 5),
             'target_norm_axes': (0, 2)
         }
     },
@@ -106,7 +118,7 @@ config = {
         'custom_plotter': {
             'plot_function': CustomPlotTypes.RECONSTRUCTIONS,
             'plot_function_args': {},
-            'plot_interval': 9999
+            'plot_interval': 1000
         }
     },
     'info': {

@@ -269,6 +269,7 @@ class H5Dataset(Dataset):
         
         # quick check of length
         with h5py.File(h5_path, 'r') as f:
+            print(f.keys())
             if 'tensor' not in f:
                 raise ValueError("Not a valid Kaggle-optimized HDF5 file (missing 'tensor')")
             self.length = f['tensor'].shape[0]
@@ -321,3 +322,18 @@ class TorchH5Dataset(H5Dataset):
             data = self._augmentation_func(data)
         
         return data
+    
+    def _normalize_item(self, item, is_target=False):
+        if is_target:
+            mean = self._target_norm_params[0]  
+            std = self._target_norm_params[1]   
+        else:
+            mean = self._norm_params[0]  
+            std = self._norm_params[1]   
+        if isinstance(item, np.ndarray):
+            item = torch.from_numpy(item)
+        try:
+            item = (item - mean) / (std + 1e-10)
+            return item.float()
+        except Exception as e:
+            raise ValueError(f"Error normalizing data: {e}")

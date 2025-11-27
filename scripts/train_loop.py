@@ -3,7 +3,7 @@ from packages.io.torch_dataloaders import get_data_loaders
 import torch
 from packages.data_objects.dataset import TorchDataset, TestTorchDataset
 from dotenv import load_dotenv
-from packages.models.vqae_23 import VQAE, VQVAEConfig
+from packages.models.vqae_23 import VQAE, VQAEConfig
 import sys
 from packages.train.loss import VQAE23Loss
 from dataclasses import dataclass
@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from packages.train.seed import _set_seed
 _set_seed(seed=42)
 @dataclass
-class Config(VQVAEConfig):
+class Config(VQAEConfig):
     """Configuration for the VQ-VAE model."""
     use_quantizer: bool = False  # Whether to use vector quantization
     # Data shape parameters

@@ -4,8 +4,8 @@ import numpy as np
 from torch.utils.data import Dataset, DataLoader
 import logging
 import os
-
-from packages.data_objects.dataset import H5Dataset
+from packages.train.loss import VQAE23Loss
+from packages.data_objects.dataset import H5Dataset, TorchH5Dataset
 from packages.io.torch_dataloaders import get_data_loaders 
 logging.basicConfig(level=logging.INFO)
 
@@ -60,45 +60,134 @@ def load_signal_hdf5(file_path: str):
             }
 
 
+def znorm(tensor: torch.Tensor, axes: tuple, eps: float = 1e-8) -> torch.Tensor:
+    """
+    Z-normalize tensor along specified axes.
+    
+    Args:
+        tensor: Input tensor
+        axes: Tuple of axes to normalize over (e.g., (0, 1) or (-1,))
+        eps: Small constant for numerical stability
+        
+    Returns:
+        Normalized tensor
+    """
+    mean = tensor.mean(dim=axes, keepdim=True)
+    std = tensor.std(dim=axes, keepdim=True)
+    return (tensor - mean) / (std + eps)
+
+
 # Test Script
 if __name__ == "__main__":
     # 1. Inspect the file
-    file_path = "scripts/test_output/TEST/motor_eeg_dataset.h5"  # Update this path!
+    file_path = "scripts/test_output/TEST/motor_eeg_dataset.h5"
     
-    print("--- Inspecting File ---")
-    try:
-        info = load_signal_hdf5(file_path)
-    except Exception as e:
-        print(f"Error inspecting file: {e}")
-        exit()
-        
-    if info['type'] == 'kaggle':
-        # 2. Test PyTorch Loading (Simulating training loop)
-        print("\n--- Testing PyTorch DataLoader ---")
-        dataset = H5Dataset(file_path)
-        
-        # Test simple access
-        sample = dataset[0]
-        print(f"Sample 0 tensor shape: {sample['input'].shape}")
-        
-        train_loader, val_loader, test_loader = get_data_loaders(dataset, batch_size=32, norm_axes=[0,4], target_norm_axes=[0,2])
-        
-        
-        print("\nIterating 1 batch...")
-        for batch in train_loader:
-            print(f"Batch tensor shape: {batch['input'].shape}")
-            print(f"Batch eeg shape:    {batch['target'].shape}")
-            print(f"Batch tensor mean: {torch.mean(batch['input']):.4f}, std: {torch.std(batch['input']):.4f}")
-            print(f"Batch eeg mean:    {torch.mean(batch['target']):.4f}, std: {torch.std(batch['target']):.4f}")
-            break  # Just one batch for test
+    print("=" * 60)
+    print("OVERFITTING TEST - Single Sample")
+    print("=" * 60)
+    
+    # Load dataset
+    dataset = TorchH5Dataset(file_path)
+    print(f"\nDataset: {len(dataset)} samples")
+    
+    # Get single sample
+    sample = dataset[0]
+    single_input = sample['input'].unsqueeze(0)  # Add batch dim: (1, 2, 30, 7, 5, 80)
+    single_target = sample['target'].unsqueeze(0)  # (1, 32, 80)
+    
+    print(f"Input shape:  {single_input.shape}")
+    print(f"Target shape: {single_target.shape}")
+    
+    # ========================================
+    # Z-NORMALIZATION
+    # ========================================
+    print("\n--- Applying Z-normalization ---")
+    
+    # Input: (1, 2, 30, 7, 5, 80) - normalize over (channels, freq, time)
+    # Keep spatial structure intact, normalize across (1, 2, -1) = (complex, freq, time)
+    print("Before norm - Input mean:", single_input.mean().item(), "std:", single_input.std().item())
+    single_input = znorm(single_input, axes=(1, 2, -1))  # Normalize over (complex, freq, time)
+    print("After norm  - Input mean:", single_input.mean().item(), "std:", single_input.std().item())
+    
+    # Target: (1, 32, 80) - normalize over (channels, time)
+    print("Before norm - Target mean:", single_target.mean().item(), "std:", single_target.std().item())
+    single_target = znorm(single_target, axes=(1, 2))  # Normalize over (channels, time)
+    print("After norm  - Target mean:", single_target.mean().item(), "std:", single_target.std().item())
+    
+    # Create model
+    from packages.models.vqae_light import VQAELight, VQAELightConfig
+    
+    config = VQAELightConfig(
+        use_quantizer=False  # Disable VQ for easier overfitting test
+    )
+    
+    model = VQAELight(config)
+    model.train()
+    
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
+    
+    print(f"\nModel parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"VQ enabled: {config.use_quantizer}")
+    
+    # Training loop
+    print("\n" + "=" * 60)
+    print("TRAINING - Overfitting Single Sample")
+    print("=" * 60)
+    
+    num_epochs = 1000
+    print_every = 50
+    loss_fn = VQAE23Loss(bottleneck_var_weight=0.0, bottleneck_cov_weight=0.0, freq_weight=0.0)  
+    for epoch in range(num_epochs):
+        optimizer.zero_grad()
 
-        print("\n✅ SUCCESS: Dataset is ready for Kaggle training!")
+        # Forward
+        outputs = model(single_input)
+        
+        # Loss
+        # loss = torch.nn.functional.mse_loss(
+        #     outputs['reconstruction'], 
+        #     single_target
+        # )
 
-    # Print dataset length and gb size
-    print(f"\nDataset length: {len(dataset)} samples")
-    file_size_gb = os.path.getsize(file_path) / (1024 **3)
-    print(f"File size on disk: {file_size_gb:.2f} GB")
+        loss = loss_fn(outputs, 
+            {'input': single_input, 'target': single_target}
+        )
 
-    # Print single sample kb size
-    single_sample_size = info['tensor_shape'][1] * info['tensor_shape'][2] * info['tensor_shape'][3] * info['tensor_shape'][4] * 4 / 1024
-    print(f"Single sample size in memory: {single_sample_size:.2f} KB")
+        
+        # Backward
+        loss['loss'].backward()
+        optimizer.step()
+        
+        # Print progress
+        if (epoch + 1) % print_every == 0 or epoch == 0:
+            print(f"Epoch {epoch+1:4d}/{num_epochs} | Loss: {loss}")
+    
+    print("\n" + "=" * 60)
+    print("FINAL RESULTS")
+    print("=" * 60)
+    print(f"Final Loss: {loss['loss'].item():.6f}")
+    
+    # Check reconstruction quality
+    with torch.no_grad():
+        outputs = model(single_input)
+        recon = outputs['reconstruction']
+        
+        mse = torch.nn.functional.mse_loss(recon, single_target).item()
+        mae = torch.nn.functional.l1_loss(recon, single_target).item()
+        
+        print(f"MSE: {mse:.6f}")
+        print(f"MAE: {mae:.6f}")
+        
+        # Correlation
+        recon_flat = recon.flatten()
+        target_flat = single_target.flatten()
+        corr = torch.corrcoef(torch.stack([recon_flat, target_flat]))[0, 1].item()
+        print(f"Correlation: {corr:.4f}")
+    
+    print("\n✅ Overfitting test complete!")
+    
+    # Expected behavior:
+    # - Loss should decrease significantly (> 10x reduction)
+    # - Final loss should be very low (< 0.01)
+    # - Correlation should approach 1.0
+    # If not, there's a bug in the model architecture

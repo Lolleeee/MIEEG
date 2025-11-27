@@ -9,8 +9,9 @@ from packages.train.loss import TorchLoss, TorchMSELoss, TorchL1Loss, SequenceVQ
 from packages.models.vqae_skip import SequenceVQAE as SequenceVQAE_Skip
 from packages.models.vqae import VQVAE
 from packages.models.vqae_23 import VQAE as VQAE23
+from packages.models.vqae_light import VQAELight
 from packages.models.test_models import SimpleVQVAE, SimpleAutoencoder
-from packages.data_objects.dataset import H5Dataset, TorchDataset, TestTorchDataset
+from packages.data_objects.dataset import H5Dataset, TorchDataset, TestTorchDataset, TorchH5Dataset
 from enum import Enum
 import json
 from pprint import pprint
@@ -72,7 +73,7 @@ MODEL_MAP = {
     ModelType.VQVAE: VQVAE,
     ModelType.SEQUENCE_VQAE_SKIP: SequenceVQAE_Skip,
     ModelType.SIMPLE_VQVAE: SimpleVQVAE,
-    ModelType.SIMPLE_AE: SimpleAutoencoder,
+    ModelType.COMVQAE23: VQAELight,
     ModelType.VQAE23: VQAE23,
 }
 
@@ -91,7 +92,7 @@ LOSS_MAP = {
 DATASET_MAP = {
     DatasetType.TORCH_DATASET: TorchDataset,
     DatasetType.TEST_TORCH_DATASET: TestTorchDataset,
-    DatasetType.H5_DATASET: H5Dataset,
+    DatasetType.H5_DATASET: TorchH5Dataset,
 }
 
 METRIC_MAP = {

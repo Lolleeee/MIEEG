@@ -12,18 +12,18 @@ from packages.data_objects.dataset import FileDataset
 from packages.processing import misc, tensor_reshape, wavelet
 from scripts import debug_constants
 import h5py
-from packages.io.h5 import _create_kaggle_hdf5_file, batch_append_to_kaggle_hdf5, save_signal
+from packages.io.h5 import save_signal
 import logging
 
 logging.basicConfig(level=logging.INFO)
 
 def main():
     load_dotenv()
-    base_folder = "/media/lolly/SSD/MotorImagery_Preprocessed/P40"
-    out_path = "scripts/test_output/TEST"
+    base_folder = "/media/lolly/SSD/MotorImagery_Preprocessed/P88"
+    out_path = "/media/lolly/SSD"
     
     # HDF5 Kaggle dataset path
-    dataset_path = os.path.join(out_path, "motor_eeg_dataset.h5")
+    dataset_path = os.path.join(out_path, "motor_eeg_dataset_test.h5")
     os.makedirs(out_path, exist_ok=True)
     
     def unpack(input: Dict):
@@ -95,12 +95,13 @@ def main():
             out,
             out_path,
             out_format="h5",
-            separate_epochs=True,
-            group_patients=True,
+            separate_epochs=True,        
+            group_patients=False,         
             use_float16=True,
             compression_level=5,
-            kaggle_mode=True,
-            kaggle_file_path=dataset_path
+            kaggle_mode=True,            
+            kaggle_file_path=dataset_path, 
+            batch_append=True             
         )
             
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 
 @dataclass
-class VQVAEConfig:
+class VQAEConfig:
     """Configuration for the VQ-VAE model."""
     use_quantizer: bool = True  # Whether to use vector quantization
     # Data shape parameters
@@ -202,7 +202,7 @@ class Encoder2DStage(nn.Module):
     Processes each (R×C) spatial location independently with 2D convs across frequency-time.
     """
     
-    def __init__(self, config: VQVAEConfig):
+    def __init__(self, config: VQAEConfig):
         super().__init__()
         self.config = config
         
@@ -253,7 +253,7 @@ class Encoder3DStage(nn.Module):
     Processes spatial-temporal structure with frequency bands merged as channels.
     """
     
-    def __init__(self, config: VQVAEConfig, channels_in: int, time_in: int, **kwargs):
+    def __init__(self, config: VQAEConfig, channels_in: int, time_in: int, **kwargs):
         super().__init__()
         self.config = config
         
@@ -323,7 +323,7 @@ class Decoder(nn.Module):
     Maps from compact embedding back to (OrigChannels × ChunkDim) EEG signal.
     """
     
-    def __init__(self, config: VQVAEConfig):
+    def __init__(self, config: VQAEConfig):
         super().__init__()
         self.config = config
         
@@ -401,12 +401,12 @@ class Decoder(nn.Module):
         return x
 
 class VQAE(nn.Module):
-    def __init__(self, config: VQVAEConfig):
+    def __init__(self, config: VQAEConfig):
         super().__init__()
         
         if isinstance(config, dict):
-            config = VQVAEConfig(**config)
-        elif not isinstance(config, VQVAEConfig):
+            config = VQAEConfig(**config)
+        elif not isinstance(config, VQAEConfig):
             raise TypeError(f"config must be VQVAEConfig or dict, got {type(config)}")
         
         self.config = config
@@ -559,7 +559,7 @@ class VQAE(nn.Module):
 
 if __name__ == "__main__":
     # Simple test of VQAE model
-    config = VQVAEConfig()
+    config = VQAEConfig()
     model = VQAE(config)
     
     # Dummy input: batch size 2, F=25, R=8, C=8, T=250

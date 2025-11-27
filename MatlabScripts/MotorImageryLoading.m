@@ -25,7 +25,7 @@ target_chans = string({
 
 patients = dir(input_path);
 
-for p = 1:length(patients)
+for p = 88:length(patients)
     edf_list = dir(fullfile(patients(p).folder, patients(p).name, '*.edf'));
     
     for r = 1:length(edf_list)
@@ -34,6 +34,7 @@ for p = 1:length(patients)
         
         % Load EDF file as timetable (each cell = 160x1 for 1 sec at 160 Hz)
         TT = edfread(filepath);
+
         num_seconds = height(TT);
         Fs = 160;  % original sampling frequency
         
@@ -51,7 +52,10 @@ for p = 1:length(patients)
         TT = TT(:, idx(found));
         target_chans_filtered = target_chans(found);
         num_channels = width(TT);
-        
+        if length(TT{1, "F3__"}{1}) ~= 160
+            fprintf("Detected abnormal length %d", length(TT{1, "F3__"}))
+            continue
+        end
         % Pre-allocate continuous EEG matrix (channels x samples)
         total_samples = num_seconds * Fs;
         full_eeg = zeros(num_channels, total_samples);
