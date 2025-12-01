@@ -41,6 +41,9 @@ def main():
 ])
     frequencies = tuple(frequencies.tolist())
 
+    from scipy.signal import butter, sosfiltfilt
+    sos = butter(4, [0.4, 79.9], btype='bandpass', fs=160, output='sos')
+    
     for patient, trial, eeg_data in tqdm.tqdm(loader):
         
         EEG = EegSignal(
@@ -52,8 +55,8 @@ def main():
             electrode_schema=debug_constants.CHANNELS_32,
         )
 
-        EEG = tensor_reshape.segment_signal(EEG, window=80, overlap=0)
-
+        EEG = tensor_reshape.segment_signal(EEG, window=640, overlap=0)
+        EEG.signal = sosfiltfilt(sos, EEG.signal, axis=-1)
         EEG.signal = EEG.signal.astype(np.float16)
 
         out = {'eeg': EEG}

@@ -1,45 +1,61 @@
 import torch
 import torch.nn as nn
 import numpy as np
+import matplotlib.pyplot as plt
+import torch
+import torch.nn as nn
+import numpy as np
 
 class CWTHead(nn.Module):
     def __init__(
         self, 
-        frequencies: list, 
+        frequencies: list | np.ndarray, 
         fs: int, 
         num_channels: int = 32,
-        n_cycles: float = 5.0,
-        trainable: bool = False
+        n_cycles: float = 6.0,
+        trainable: bool = False,
+        chunk_samples: int = None 
     ):
         super().__init__()
         self.num_channels = num_channels
         self.frequencies = frequencies
         self.num_freqs = len(frequencies)
+        self.chunk_size_samples = chunk_samples 
         
-        # 1. Setup Filters
-        # We make the kernel size odd so padding is symmetric (no phase shift)
-        kernel_size = int(4 * fs / np.min(frequencies)) 
-        if kernel_size % 2 == 0: kernel_size += 1
+        # 1. Setup Filters (Corrected for Dynamic Cycles)
+        # We need to calculate sigma_max using the same logic as create_weights
+        # At lowest freq (e.g. 1Hz), we might scale down cycles to 2.0
+        f_min = np.min(frequencies)
+        if f_min < 4.0:
+            cycles_at_min = max(2.0, n_cycles * (f_min / 4.0))
+        else:
+            cycles_at_min = n_cycles
+            
+        sigma_max = cycles_at_min / (2 * np.pi * f_min)
+        
+        # Kernel size: 8 sigmas covers >99.9% of energy
+        kernel_size = int(8 * sigma_max * fs) 
+        if kernel_size % 2 == 0: kernel_size += 1 
         
         padding = kernel_size // 2 
         
-        # 2. Convolution Layer (The CWT Engine)
+        # 2. Convolution Layer
         self.conv = nn.Conv1d(
             in_channels=num_channels,
-            out_channels=num_channels * self.num_freqs * 2, # Real + Imag parts
+            out_channels=num_channels * self.num_freqs * 2, 
             kernel_size=kernel_size,
             padding=padding,
-            groups=num_channels, # IMPORTANT: Keeps channels separate
+            padding_mode='reflect', 
+            groups=num_channels,    
             bias=False
         )
         
-        # Initialize with Morlet weights
-        weights = self._create_morlet_weights(frequencies, fs, kernel_size, n_cycles=n_cycles)
+        # Pass n_cycles_max to the weight creator
+        weights = self._create_morlet_weights(frequencies, fs, kernel_size, n_cycles_max=n_cycles)
         self.conv.weight.data = weights
         self.conv.weight.requires_grad = trainable
         
-        # 3. Spatial Mapping Vectors (The "Advanced Indexing" setup)
-        # Mapping: Channel ID -> (Row, Col)
+        # 3. Spatial Mapping Vectors
         mapping_matrix = np.array([
             [-1,  0, -1,  1, -1],
             [ 2,  3,  4,  5,  6],
@@ -56,82 +72,84 @@ class CWTHead(nn.Module):
             rows.append(coords[0][0])
             cols.append(coords[1][0])
             
-        # Register as buffers so they move to GPU with the model
         self.register_buffer('rows', torch.tensor(rows).long())
         self.register_buffer('cols', torch.tensor(cols).long())
         
         self.grid_h, self.grid_w = 7, 5
 
-    def forward(self, x):
-        """
-        x: (Batch, 32, Time)
-        Returns: (Batch, 2, Freq, 7, 5, Time)
-        """
+    def forward_pre_chunk(self, x):
+        """Standard CWT Forward Pass (No splitting)."""
         B, C, T = x.shape
-        
-        # Step 1: Convolve
-        # Output: (B, 32*F*2, T)
-        cwt_raw = self.conv(x)
-        
-        # Step 2: Reshape
-        # (B, Channel, Freq, Real/Imag, T)
+        cwt_raw = self.conv(x) # (B, 32*F*2, T)
         cwt_reshaped = cwt_raw.view(B, C, self.num_freqs, 2, T)
         
-        # Step 3: Mag & Phase
-        real = cwt_reshaped[..., 0, :] # (B, C, F, T)
-        imag = cwt_reshaped[..., 1, :] # (B, C, F, T)
+        real = cwt_reshaped[..., 0, :] 
+        imag = cwt_reshaped[..., 1, :] 
         
         mag = torch.sqrt(real.pow(2) + imag.pow(2))
         phase = torch.atan2(imag, real)
         
-        # Stack Mag/Phase. 
-        # Let's stack on last dim first to be safe, then permute.
-        # stack -> (B, C, F, T, 2)
         features = torch.stack([mag, phase], dim=-1)
-        
-        # We need target shape: (B, 2, F, 32, T) for the canvas assignment
-        # Current: (B, 32, F, T, 2)
-        # Permute: (0, 4, 2, 1, 3) -> (B, 2, F, 32, T)
         features = features.permute(0, 4, 2, 1, 3)
         
-        # Step 4: Map to Grid
         canvas = torch.zeros(
             B, 2, self.num_freqs, self.grid_h, self.grid_w, T,
             device=x.device, dtype=x.dtype
         )
-        
-        # Now shapes match perfectly:
-        # canvas slice: (B, 2, F, 32, T)
-        # features:     (B, 2, F, 32, T)
         canvas[:, :, :, self.rows, self.cols, :] = features
-        
         return canvas
 
+    def forward(self, x):
+        """Main forward pass with optional chunking."""
+        B, C, Total_Time = x.shape
+        full_cwt = self.forward_pre_chunk(x)
+        
+        if self.chunk_size_samples is None:
+            return full_cwt
+            
+        if Total_Time % self.chunk_size_samples != 0:
+            raise ValueError(f"Total Time {Total_Time} not divisible by {self.chunk_size_samples}")
+            
+        num_chunks = Total_Time // self.chunk_size_samples
+        cwt_permuted = full_cwt.permute(0, 5, 1, 2, 3, 4)
+        chunks = cwt_permuted.view(B, num_chunks, self.chunk_size_samples, 2, self.num_freqs, self.grid_h, self.grid_w)
+        chunks_merged = chunks.reshape(B * num_chunks, self.chunk_size_samples, 2, self.num_freqs, self.grid_h, self.grid_w)
+        output = chunks_merged.permute(0, 2, 3, 4, 5, 1)
+        
+        return output
 
-    def _create_morlet_weights(self, freqs, fs, K, n_cycles=5.0):
+    def _create_morlet_weights(self, freqs, fs, K, n_cycles_max=6.0):
         """
-        Args:
-            n_cycles (float): Number of cycles in the Gaussian envelope. 
-                              Standard for EEG is 3.0 to 6.0.
+        Creates Morlet kernels with Dynamic Cycle Scaling for low frequencies.
+        This allows low-frequency wavelets (0.5-4Hz) to fit inside 4s windows.
         """
         weights = torch.zeros(self.num_channels * self.num_freqs * 2, 1, K)
         t = np.linspace(-K/2/fs, K/2/fs, K)
         
         for i, f in enumerate(freqs):
-            # --- CONSTANT Q TRANSFORMATION ---
-            # sigma scales with frequency to keep number of cycles constant
-            # sigma = n_cycles / (2 * pi * f)
-            # This ensures we capture ~n_cycles of the oscillation
-            sigma = n_cycles / (2 * np.pi * f)
+            # --- DYNAMIC CYCLE SCALING (IMPROVED) ---
+            # At 0.5Hz: cycles = 3.0 (fits in ~6s, okay for 4s window with padding)
+            # At 1.0Hz: cycles = 4.0 (fits in 4s window)
+            # At 4.0Hz: cycles = 6.0 (full resolution)
+            # Above 4Hz: cycles = 6.0 (stays at max)
             
-            # Complex Morlet
+            if f < 1.0:
+                # Scale from 3.0 at 0.5Hz to 4.0 at 1.0Hz
+                cycles = 3.0 + (f / 1.0) * (4.0 - 3.0)
+            elif f < 4.0:
+                # Scale from 4.0 at 1Hz to 6.0 at 4Hz
+                cycles = 4.0 + ((f - 1.0) / 3.0) * (6.0 - 4.0)
+            else:
+                # Full resolution for high frequencies
+                cycles = n_cycles_max
+                
+            sigma = cycles / (2 * np.pi * f)
+            
             sine = np.exp(2j * np.pi * f * t)
             gauss = np.exp(-t**2 / (2 * sigma**2))
             wavelet = sine * gauss
             
-            # Energy Normalization
-            # For CWT, we usually normalize by 1/sqrt(sigma) or L2 norm
-            # L2 norm is safest for Neural Networks to keep gradients stable
+            # Normalize
             wavelet /= np.linalg.norm(wavelet)
             
             for c in range(self.num_channels):
@@ -139,35 +157,7 @@ class CWTHead(nn.Module):
                 idx_imag = idx_real + 1
                 weights[idx_real, 0, :] = torch.from_numpy(np.real(wavelet))
                 weights[idx_imag, 0, :] = torch.from_numpy(np.imag(wavelet))
-                
+                    
         return weights
 
 
-if __name__ == "__main__":
-    # Test Code
-    fs = 100
-    freqs = [10] # Just test 10Hz
-    model = CWTHead(frequencies=freqs, fs=fs)
-
-    # 1. Create a pure 10Hz Sine Wave on Channel 3
-    t = torch.linspace(0, 1, fs) # 1 second
-    sine_wave = torch.sin(2 * np.pi * 10 * t).unsqueeze(0).unsqueeze(0) # (1, 1, 100)
-    data = torch.zeros(1, 32, 100)
-    data[:, 3, :] = sine_wave # Put signal ONLY on Channel 3
-
-    # 2. Run Model
-    out = model(data) # (1, 2, 1, 7, 5, 100)
-    print("Output shape:", out.shape)
-    # 3. Verify
-    # Channel 3 corresponds to Row 1, Col 1 in your map.
-    # We expect high magnitude there, and 0 magnitude elsewhere.
-    target_mag = out[0, 0, 0, 1, 1, :].mean().item()
-    empty_mag = out[0, 0, 0, 0, 0, :].mean().item() # Spot (-1)
-
-    print(f"Magnitude at Ch3 (1,1): {target_mag:.4f} (Should be > 0)")
-    print(f"Magnitude at Empty (0,0): {empty_mag:.4f} (Should be 0.0)")
-
-    if target_mag > 0.1 and empty_mag == 0.0:
-        print("✅ SUCCESS: Mapping and CWT logic are correct.")
-    else:
-        print("❌ FAILURE: Something is wrong.")
