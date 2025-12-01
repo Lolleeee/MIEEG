@@ -378,7 +378,6 @@ class VQAELight(nn.Module):
         if self.use_cwt:
             x = self.cwt_head(x)  # (B, 2, F, 7, 5, T)
 
-        print(x.shape)
         z_e = self.encode(x)
 
         if self.config.use_quantizer:
@@ -419,11 +418,11 @@ if __name__ == "__main__":
     )
     
     model = VQAELight(config)
-    x = torch.randn(2, 2, 30, 7, 5, 80)
+    x = torch.randn(2, 2, 30, 7, 5, 640)
     
     with torch.no_grad():
         out = model(x)
-    
+        
     print(f"\nInput shape:        {x.shape}")
     print(f"Output shape:       {out['reconstruction'].shape}")
     print(f"Embedding shape:    {out['embeddings'].shape}")

@@ -1,35 +1,22 @@
-from packages.models.autoencoder import Conv3DAE
-from packages.train.training import train_model
+from packages.data_objects.dataset import TorchH5Dataset, autoencoder_unpack_func
 from packages.io.torch_dataloaders import get_data_loaders
+dataset = TorchH5Dataset(h5_path='/media/lolly/SSD/motor_eeg_dataset/motor_eeg_dataset.h5', unpack_func=autoencoder_unpack_func)
+train_loader, _, _ = get_data_loaders(dataset, norm_axes=(0,2), target_norm_axes=(0,2), norm_convergence_threshold=1e-3, batch_size=64)
+
+batch = next(iter(train_loader))
+
+from packages.models.vqae_light import VQAELight, VQAELightConfig
+config = VQAELightConfig(
+    use_quantizer=False,
+    use_cwt=True,
+    chunk_samples=160
+)
+model = VQAELight(config)
 import torch
-import os
-from packages.data_objects.dataset import Dataset
-from dotenv import load_dotenv
-model = Conv3DAE(in_channels=50, latent_dim=256)
-load_dotenv()
-dataset_path = os.getenv("DATASET_PATH")
-# Dummy training loop
-optimizer = torch.optim.AdamW
-criterion = torch.nn.MSELoss
-mae = torch.nn.L1Loss
-
-config = {
-    'batch_size': 32,
-    'lr': 1e-3,
-    'epochs': 5,
-    'backup_interval': 10,
-    'EarlyStopping' : {'patience': 1, 'min_delta': 0.1},
-    'BackupManager': {'backup_interval': 10, 'backup_path': './model_backups'},
-    'ReduceLROnPlateau': {'mode': 'min', 'patience': 1, 'factor': 0.1},
-    'history_plot': {'plot_type': 'extended', 'save_path': './training_history'}
-}
-
-metrics = {'MAE': mae}
-
-dataset = Dataset.get_test_dataset(root_folder=dataset_path, unpack_func='dict', nsamples=4)
-
-train_loader, val_loader, _ = get_data_loaders(dataset, sets_size={'train': 0.5, 'val': 0.5, 'test': 0})
-
-print("\nStarting dummy training loop...")
-model.train()
-train_model(model, train_loader=train_loader, val_loader=val_loader, loss_criterion=criterion, optimizer=optimizer, config=config, metrics=metrics)
+with torch.no_grad():
+    out = model(batch['input'])
+    cwt = model.cwt_head(batch['input'])
+    target = batch['target']
+    print("cwt mean:", cwt.mean().item(), "std:", cwt.std().item())
+    print("recon mean:", out['reconstruction'].mean().item(), "std:", out['reconstruction'].std().item())
+    print("target mean:", target.mean().item(), "std:", target.std().item())
