@@ -16,7 +16,8 @@ from packages.models.vqae_light import VQAELight, VQAELightConfig
 from packages.data_objects.dataset import autoencoder_unpack_func
 model_config = VQAELightConfig(
     use_quantizer=False,
-    use_cwt=True
+    use_cwt=True,
+    chunk_samples=160
 )
 
     
@@ -31,7 +32,7 @@ config = {
     'dataset': {
         'dataset_type': DatasetType.H5_DATASET,
         'dataset_args': {
-            'h5_path': '/media/lolly/SSD/motor_eeg_dataset/motor_eeg_dataset_kaggle_optimized.h5',
+            'h5_path': '/media/lolly/SSD/motor_eeg_dataset/motor_eeg_dataset.h5',
             'unpack_func': autoencoder_unpack_func
         },
         'data_loader': {

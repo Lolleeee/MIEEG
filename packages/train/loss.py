@@ -340,7 +340,7 @@ class VQAE23Loss(TorchLoss):
         recon = outputs['reconstruction']
         embeddings = outputs['embeddings']
         vq_loss = outputs.get('vq_loss', torch.tensor(0., device=target.device))
-
+        
         # 1. Time-domain Reconstruction
         recon_loss = F.mse_loss(recon, target)
         

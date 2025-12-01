@@ -80,6 +80,7 @@ class CWTHead(nn.Module):
     def forward_pre_chunk(self, x):
         """Standard CWT Forward Pass (No splitting)."""
         B, C, T = x.shape
+
         cwt_raw = self.conv(x) # (B, 32*F*2, T)
         cwt_reshaped = cwt_raw.view(B, C, self.num_freqs, 2, T)
         
@@ -110,10 +111,10 @@ class CWTHead(nn.Module):
         if Total_Time % self.chunk_size_samples != 0:
             raise ValueError(f"Total Time {Total_Time} not divisible by {self.chunk_size_samples}")
             
-        num_chunks = Total_Time // self.chunk_size_samples
+        self.num_chunks = Total_Time // self.chunk_size_samples
         cwt_permuted = full_cwt.permute(0, 5, 1, 2, 3, 4)
-        chunks = cwt_permuted.view(B, num_chunks, self.chunk_size_samples, 2, self.num_freqs, self.grid_h, self.grid_w)
-        chunks_merged = chunks.reshape(B * num_chunks, self.chunk_size_samples, 2, self.num_freqs, self.grid_h, self.grid_w)
+        chunks = cwt_permuted.view(B, self.num_chunks, self.chunk_size_samples, 2, self.num_freqs, self.grid_h, self.grid_w)
+        chunks_merged = chunks.reshape(B * self.num_chunks, self.chunk_size_samples, 2, self.num_freqs, self.grid_h, self.grid_w)
         output = chunks_merged.permute(0, 2, 3, 4, 5, 1)
         
         return output
@@ -160,4 +161,10 @@ class CWTHead(nn.Module):
                     
         return weights
 
-
+    def unchunk_raw_eeg(self, x):
+        """Going from (Batch*NChunks, Channels, ChunkSize) to (Batch, Channels, TotalTime)"""
+        Bn, C, chunk_T = x.shape
+        if self.chunk_size_samples is None:
+            return x
+        x = x.view(-1, C, self.num_chunks*chunk_T)
+        return x

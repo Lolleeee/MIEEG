@@ -12,14 +12,14 @@ class VQAELightConfig:
 
     # CWT parameters
     cwt_frequencies: tuple = None
-    chunk_samples: int = None  # If None, no chunking
+    chunk_samples: int = 160  # If None, no chunking
 
     # Data shape parameters
     num_input_channels: int = 2   # Power + Phase
-    num_freq_bands: int = 30
+    num_freq_bands: int = 25
     spatial_rows: int = 7
-    spatial_cols: int = 5
-    time_samples: int = 80        # Fixed time window size
+    spatial_cols: int = 5        # Fixed time window size
+    time_samples: int = 160
     orig_channels: int = 32       # Target output channels
     
     # Encoder parameters
@@ -57,11 +57,7 @@ class VQAELightConfig:
         if self.decoder_channels is None:
             self.decoder_channels = [64, 32]
         if self.cwt_frequencies is None:
-            frequencies = np.concatenate([
-                np.linspace(1, 4, 3), np.linspace(4, 8, 5)[1:], 
-                np.linspace(8, 13, 8)[1:], np.linspace(13, 30, 10)[1:], 
-                np.linspace(30, 80, 8)[1:]
-            ])
+            frequencies = np.logspace(np.log10(0.5), np.log10(79.9), 25)
             self.cwt_frequencies = tuple(frequencies)
 
 
@@ -381,6 +377,8 @@ class VQAELight(nn.Module):
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         if self.use_cwt:
             x = self.cwt_head(x)  # (B, 2, F, 7, 5, T)
+
+        print(x.shape)
         z_e = self.encode(x)
 
         if self.config.use_quantizer:
@@ -392,6 +390,9 @@ class VQAELight(nn.Module):
         
         recon = self.decode(z_q)
 
+        # Unchunk if necessary
+        if self.use_cwt and self.chunk_samples is not None:
+            recon = self.cwt_head.unchunk_raw_eeg(recon)
         return {
             'reconstruction': recon,
             'embeddings': z_e,
