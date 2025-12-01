@@ -3,12 +3,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple, Dict
 from dataclasses import dataclass
-
+import numpy as np
 @dataclass
 class VQAELightConfig:
     """Configuration for the VQ-VAE model."""
     use_quantizer: bool = True
-    
+    use_cwt: bool = True
+
+    # CWT parameters
+    cwt_frequencies: tuple = None
+
     # Data shape parameters
     num_input_channels: int = 2   # Power + Phase
     num_freq_bands: int = 30
@@ -51,6 +55,13 @@ class VQAELightConfig:
             self.encoder_3d_channels = [32, 64]
         if self.decoder_channels is None:
             self.decoder_channels = [64, 32]
+        if self.cwt_frequencies is None:
+            frequencies = np.concatenate([
+                np.linspace(1, 4, 3), np.linspace(4, 8, 5)[1:], 
+                np.linspace(8, 13, 8)[1:], np.linspace(13, 30, 10)[1:], 
+                np.linspace(30, 80, 8)[1:]
+            ])
+            self.cwt_frequencies = tuple(frequencies)
 
 
 # --- Utility Blocks ---
@@ -308,6 +319,18 @@ class VQAELight(nn.Module):
         if isinstance(config, dict): config = VQAELightConfig(**config)
         self.config = config
         
+        self.use_cwt = config.use_cwt
+
+        if self.use_cwt:
+            from packages.models.wavelet_head import CWTHead
+            self.cwt_head = CWTHead(
+                frequencies=config.cwt_frequencies,
+                fs=160,
+                num_channels=config.orig_channels,
+                n_cycles=5.0,
+                trainable=False
+            )
+
         self.encoder_2d = Encoder2DStageLight(config)
         
         enc3d_in_channels = self.encoder_2d.out_channels * self.encoder_2d.freq_out
@@ -353,7 +376,8 @@ class VQAELight(nn.Module):
         return self.decoder(z_q)
     
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
-        
+        if self.use_cwt:
+            x = self.cwt_head(x)  # (B, 2, F, 7, 5, T)
         z_e = self.encode(x)
 
         if self.config.use_quantizer:

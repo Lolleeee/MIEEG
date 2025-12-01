@@ -6,103 +6,95 @@ import numpy as np
 from dotenv import load_dotenv
 import torch
 import tqdm
-
 from packages.data_objects.signal import EegSignal
 from packages.data_objects.dataset import FileDataset
 from packages.processing import misc, tensor_reshape, wavelet
 from scripts import debug_constants
 import h5py
-from packages.io.h5 import save_signal
+from packages.io.h5 import benchmark_loading_speed, save_signal, verify_optimization
 import logging
 
 logging.basicConfig(level=logging.INFO)
 
+# ============================================================================
+# KAGGLE ENVIRONMENT SETTINGS - UPDATED
+# ============================================================================
+KAGGLE_SETTINGS = {
+    'target_batch_size': 64,     
+    'compression_level': None,     # Set to None because we use LZF now
+    'use_float16': True,
+    'max_dataset_size_gb': 200,
+}
+
 def main():
     load_dotenv()
-    base_folder = "/media/lolly/SSD/MotorImagery_Preprocessed/P88"
-    out_path = "/media/lolly/SSD"
-    
-    # HDF5 Kaggle dataset path
-    dataset_path = os.path.join(out_path, "motor_eeg_dataset_test.h5")
+    base_folder = "/media/lolly/SSD/MotorImagery_Preprocessed/"
+    out_path = "/media/lolly/SSD/motor_eeg_dataset"
+    dataset_path = os.path.join(out_path, "motor_eeg_dataset_kaggle_optimized.h5")
     os.makedirs(out_path, exist_ok=True)
     
     def unpack(input: Dict):
-        eeg_data = np.array(input["out_eeg"])
-        return eeg_data
+        return np.array(input["out_eeg"])
 
-    loader = FileDataset(
-        root_folder=base_folder, yield_identifiers=True, unpack_func=unpack
-    )
+    loader = FileDataset(root_folder=base_folder, yield_identifiers=True, unpack_func=unpack)
     
-    # Frequency bins (30 total)
+    # Frequencies setup (unchanged)
     frequencies = np.concatenate([
-        np.linspace(1, 4, 3),        # Delta: 3 bins
-        np.linspace(4, 8, 5)[1:],    # Theta: 4 bins
-        np.linspace(8, 13, 8)[1:],   # Alpha: 7 bins
-        np.linspace(13, 30, 10)[1:], # Beta: 9 bins
-        np.linspace(30, 80, 8)[1:]   # Gamma: 7 bins
+        np.linspace(1, 4, 3), np.linspace(4, 8, 5)[1:], 
+        np.linspace(8, 13, 8)[1:], np.linspace(13, 30, 10)[1:], 
+        np.linspace(30, 80, 8)[1:]
     ])
     frequencies = tuple(frequencies.tolist())
     
-    # Track if this is first iteration (to create file)
-    first_iteration = True
-    
-    # Batch accumulator for efficient writing
-    batch_packages = []
-    batch_patient_ids = []
-    batch_trial_ids = []
-    batch_seg_ids = []
-    BATCH_SIZE = 100  # Write every 100 samples
+    total_samples = 0
     
     for patient, trial, eeg_data in tqdm.tqdm(loader):
-        
-        # Your existing processing pipeline
+        # ... (Processing pipeline same as before) ...
         EEG = EegSignal(
-            unpacked_data=eeg_data,
-            fs=160,
-            dim_dict={"channels": 0, "time": 1},
-            patient=patient,
-            trial=trial,
-            electrode_schema=debug_constants.CHANNELS_32,
+            unpacked_data=eeg_data, fs=160, dim_dict={"channels": 0, "time": 1},
+            patient=patient, trial=trial, electrode_schema=debug_constants.CHANNELS_32,
         )
         
         EEG_Raw = copy.deepcopy(EEG)
         
-        # Wavelet transform
-        WaveletEEG = wavelet.eeg_wavelet_transform(
-            EEG, bandwidth=[1, 80], freqs=frequencies
-        )
+        WaveletEEG = wavelet.eeg_wavelet_transform(EEG, bandwidth=[1, 80], freqs=frequencies)
         WaveletEEG = misc.get_magnitude_and_phase(WaveletEEG)
-        WaveletEEG = tensor_reshape.reshape_to_spatial(
-            WaveletEEG, debug_constants.SPATIAL_DOMAIN_MATRIX_32
-        )
+        WaveletEEG = tensor_reshape.reshape_to_spatial(WaveletEEG, debug_constants.SPATIAL_DOMAIN_MATRIX_32)
         
-        # Segmentation (creates ~24 epochzs)
-        WaveletEEG = tensor_reshape.segment_signal(WaveletEEG, window=80, overlap=40)
-        EEG_Raw = tensor_reshape.segment_signal(EEG_Raw, window=80, overlap=40)
+        WaveletEEG = tensor_reshape.segment_signal(WaveletEEG, window=80, overlap=0)
+        EEG_Raw = tensor_reshape.segment_signal(EEG_Raw, window=80, overlap=0)
         
-        # Reorder dimensions for network input
-        WaveletEEG.reorder_signal_dimensions(
-            ["epochs", "complex", "frequencies", "rows", "cols", "time"]
-        )
-        
-        # Convert to float16 BEFORE creating SignalObject dict
-        # (this saves memory during processing)
+        WaveletEEG.reorder_signal_dimensions(["epochs", "complex", "frequencies", "rows", "cols", "time"])
         WaveletEEG.signal = WaveletEEG.signal.astype(np.float16)
         EEG_Raw.signal = EEG_Raw.signal.astype(np.float16)
+        
         out = {'tensor': WaveletEEG, 'eeg': EEG_Raw}
+        
         save_signal(
             out,
-            out_path,
-            out_format="h5",
-            separate_epochs=True,        
-            group_patients=False,         
-            use_float16=True,
-            compression_level=5,
-            kaggle_mode=True,            
-            kaggle_file_path=dataset_path, 
-            batch_append=True             
+            out_path=out_path,
+            out_format='h5',
+            kaggle_mode=True,
+            kaggle_file_path=dataset_path,
+            use_float16=KAGGLE_SETTINGS['use_float16'],
+            compression_level=None, # LZF ignores level
+            target_batch_size=KAGGLE_SETTINGS['target_batch_size'],
+            batch_append=True,
+            separate_epochs=True
         )
-            
+        
+        total_samples += WaveletEEG.epochs
+
+    # ====================================================================
+    # VERIFICATION
+    # ====================================================================
+    print("\n" + "="*70)
+    print("DATASET CREATION COMPLETE")
+    final_size_mb = os.path.getsize(dataset_path) / (1024**2)
+    print(f"Size: {final_size_mb:.2f} MB")
+    verify_optimization(dataset_path)
+    benchmark_loading_speed(dataset_path)
+    print("="*70 + "\n")
+
 if __name__ == "__main__":
     main()

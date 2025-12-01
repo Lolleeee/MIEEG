@@ -10,7 +10,7 @@ import torch
 from sklearn.model_selection import KFold
 from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler, Subset
 
-from packages.data_objects.dataset import RANDOM_SEED, TorchDataset
+from packages.data_objects.dataset import RANDOM_SEED, TorchDataset, TorchH5Dataset, AugmentedDataset
 
 logging.basicConfig(level=logging.INFO)
 
@@ -42,7 +42,7 @@ def _calc_norm_params(
     target_norm_params: Tuple[float, float] | Tuple[torch.Tensor, torch.Tensor] | None = None,
     max_samples: int = None,
     max_batches: int = None,
-    convergence_threshold: float = 1e-4,
+    convergence_threshold: float = 1e-3,
     min_batches: int = 10
 ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor] | None]:
     """
@@ -309,104 +309,117 @@ def _calc_norm_params(
     return input_norm, target_norm
 
 
-
 def get_data_loaders(
-    dataset: TorchDataset,
+    dataset: Union[TorchDataset, TorchH5Dataset],
     batch_size: int = 32,
     sets_size: dict = {"train": 0.6, "val": 0.2, "test": 0.2},
     num_workers: int = 4,
     norm_axes: Tuple[int] = None,
     target_norm_axes: Tuple[int] = None,
-    norm_params: Tuple[float, float] = None,
-    target_norm_params: Tuple[float, float] = None,
+    norm_params: Tuple = None,
+    target_norm_params: Tuple = None,
     augmentation_func: Callable = None,
-    max_norm_samples: int = None,  
-    max_norm_batches: int = None,  
-    norm_convergence_threshold: float = 1e-4,  
-    min_norm_batches: int = 10
+    persistent_workers: bool = True,
+    prefetch_factor: int = 2,
+    pin_memory: bool = True,
+    max_norm_samples: int = 5000, 
+    min_norm_batches: int = 10,
+    norm_convergence_threshold: float = 1e-3
+    
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
-    '''
-    Create train/val/test data loaders with optional normalization.
+    """
+    Creates optimized DataLoaders for Training, Validation, and Testing.
+    Handles HDF5 lazy loading, normalization, and split argumentation safely.
+    """
     
-    Args:
-        dataset: TorchDataset instance
-        batch_size: Batch size for dataloaders
-        sets_size: Dict with 'train', 'val', 'test' split ratios
-        num_workers: Number of workers for data loading
-        norm_axes: Axes to normalize 'input' across, e.g. (0, 2, 3) for [batch, channels, height, width]
-        target_norm_axes: Axes to normalize 'target' across. If None, target not normalized
-        norm_params: Pre-computed (mean, std) for input. If None, calculate from training set
-        target_norm_params: Pre-computed (mean, std) for target. If None, calculate from training set
-    
-    Returns:
-        (train_loader, val_loader, test_loader)
-    '''
-    assert isinstance(sets_size, dict), "sets_size must be a dict with keys 'train', 'val', 'test'"
+    # 1. SPLIT INDICES
     indices = np.arange(len(dataset))
-
     np.random.seed(RANDOM_SEED)
     np.random.shuffle(indices)
-
-    train_idx, val_idx, test_idx = _get_set_sizes(sets_size, dataset, indices)
-
-    if norm_axes is not None or target_norm_axes is not None:
-        if norm_axes is not None:
-            logging.info(f"Calculating input normalization parameters over axes {norm_axes}")
-        if target_norm_axes is not None:
-            logging.info(f"Calculating target normalization parameters over axes {target_norm_axes}")
-
-        temp_train_dataset = Subset(dataset, train_idx)
-
-        logging.info(f"Using {len(train_idx)} samples for normalization calculation")
-        temp_train_loader = DataLoader(
-            temp_train_dataset,
-            batch_size=batch_size,
-            num_workers=num_workers,
+    
+    train_idx, val_idx, test_idx = _get_set_sizes(sets_size, len(dataset), indices)
+    
+    # 2. CALCULATE NORMALIZATION (If needed)
+    # We do this BEFORE creating subsets to inject params into the base dataset
+    should_calc_input = (norm_axes is not None) and (norm_params is None)
+    should_calc_target = (target_norm_axes is not None) and (target_norm_params is None)
+    
+    if should_calc_input or should_calc_target:
+        logging.info("Calculating normalization parameters...")
+        
+        # Create a temporary subset for calculation (using only training data)
+        norm_subset = Subset(dataset, train_idx[:max_norm_samples] if max_norm_samples else train_idx)
+        
+        # Use a transient DataLoader (kill workers immediately after use)
+        norm_loader = DataLoader(
+            norm_subset, 
+            batch_size=batch_size * 2, 
+            num_workers=min(num_workers, 2), # Don't need many workers for this
+            persistent_workers=False
         )
-
-        # Calculate normalization parameters for both input and target in single pass
-        input_norm, target_norm = _calc_norm_params(
-            temp_train_loader, 
+        
+        input_stats, target_stats = _calc_norm_params(
+            norm_loader, 
             axes=norm_axes, 
             target_axes=target_norm_axes,
             norm_params=norm_params,
             target_norm_params=target_norm_params,
-            max_samples=max_norm_samples, 
-            max_batches=max_norm_batches,  
-            convergence_threshold=norm_convergence_threshold,  
-            min_batches=min_norm_batches  
+            min_batches=min_norm_batches,
+            convergence_threshold=norm_convergence_threshold
         )
-
-        # Store in dataset
-        if norm_axes is not None:
-            dataset._norm_params = input_norm
         
-        if target_norm is not None:
-            dataset._target_norm_params = target_norm
-            logging.info("Target normalization parameters calculated and stored")
-    
-    
-    train_dataset = Subset(dataset, train_idx)
-    if augmentation_func is not None:
-        train_dataset.dataset._augmentation_func = augmentation_func
+        # Inject into the underlying dataset
+        # We handle nested wrappers (in case dataset is already wrapped)
+        base_ds = dataset
+        while hasattr(base_ds, 'dataset'):
+            base_ds = base_ds.dataset
+            
+        if should_calc_input:
+            base_ds._norm_params = input_stats
+            logging.info(f"Input Normalization Set: {input_stats[0].shape}")
+            
+        if should_calc_target and target_stats:
+            base_ds._target_norm_params = target_stats
+            logging.info("Target Normalization Set")
 
+    # 3. CREATE SUBSETS
+    train_dataset = Subset(dataset, train_idx)
     val_dataset = Subset(dataset, val_idx)
     test_dataset = Subset(dataset, test_idx)
+    
+    # 4. APPLY AUGMENTATION (Train Only)
+    # We wrap the training subset so augmentation doesn't leak to Val/Test
+    if augmentation_func is not None:
+        train_dataset = AugmentedDataset(train_dataset, augmentation_func)
+        logging.info("Augmentation applied to Training set only.")
 
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        num_workers=num_workers,
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        num_workers=num_workers,
-    )
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=batch_size,
-        num_workers=num_workers,
-    )
+    # 5. CONFIGURE LOADERS
+    loader_kwargs = {
+        "batch_size": batch_size,
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+        # Only use persistent workers if we have workers (avoid error)
+        "persistent_workers": persistent_workers if num_workers > 0 else False,
+        "prefetch_factor": prefetch_factor if num_workers > 0 else None,
+    }
+
+    train_loader = DataLoader(train_dataset, shuffle=True, **loader_kwargs)
+    val_loader = DataLoader(val_dataset, shuffle=False, **loader_kwargs)
+    test_loader = DataLoader(test_dataset, shuffle=False, **loader_kwargs)
     
     return train_loader, val_loader, test_loader
+
+def _get_set_sizes(sets_size, total_len, indices):
+    train_len = int(sets_size["train"] * total_len)
+    val_len = int(sets_size["val"] * total_len)
+    
+    train_idx = indices[:train_len]
+    val_idx = indices[train_len : train_len + val_len]
+    
+    if "test" in sets_size:
+        test_len = int(sets_size["test"] * total_len)
+        test_idx = indices[train_len + val_len : train_len + val_len + test_len]
+    else:
+        test_idx = indices[train_len + val_len:]
+        
+    return train_idx, val_idx, test_idx

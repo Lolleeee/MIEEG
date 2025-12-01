@@ -11,7 +11,7 @@ from packages.models.vqae import VQVAE
 from packages.models.vqae_23 import VQAE as VQAE23
 from packages.models.vqae_light import VQAELight
 from packages.models.test_models import SimpleVQVAE, SimpleAutoencoder
-from packages.data_objects.dataset import H5Dataset, TorchDataset, TestTorchDataset, TorchH5Dataset
+from packages.data_objects.dataset import TorchDataset, TestTorchDataset, TorchH5Dataset
 from enum import Enum
 import json
 from pprint import pprint
@@ -128,7 +128,6 @@ class DataLoaderConfig(BaseModel):
     target_norm_axes: Optional[List[int]] = Field(default=None, description="Axes to normalize target over")
     augmentation: Optional[AugmentationType] = Field(default=AugmentationType.PASS, description="Type of data augmentation to apply")
     max_norm_samples: Optional[int] = Field(default=None, description="Maximum number of samples to use for normalization calculation")
-    max_norm_batches: Optional[int] = Field(default=None, description="Maximum number of batches to use for normalization calculation")
     norm_convergence_threshold: float = Field(default=1e-4, description="Convergence threshold for normalization calculation")
     min_norm_batches: int = Field(default=10, description="Minimum number of batches to process before checking convergence")
     @property

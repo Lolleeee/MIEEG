@@ -204,7 +204,6 @@ class Trainer():
             target_norm_axes=self.config.dataset.data_loader.target_norm_axes,
             augmentation_func=self.config.dataset.data_loader.get_augmentation_class,
             max_norm_samples=self.config.dataset.data_loader.max_norm_samples,
-            max_norm_batches=self.config.dataset.data_loader.max_norm_batches,
             norm_convergence_threshold=self.config.dataset.data_loader.norm_convergence_threshold,
             min_norm_batches=self.config.dataset.data_loader.min_norm_batches
         )

@@ -9,6 +9,12 @@ from dataclasses import dataclass
 class VQAEConfig:
     """Configuration for the VQ-VAE model."""
     use_quantizer: bool = True  # Whether to use vector quantization
+    use_cwt: bool = True       # Whether to use CWT preprocessing
+
+    # cwt parameters
+    cwt_frequencies: Tuple[float] = tuple(range(1, 26))
+
+
     # Data shape parameters
     num_freq_bands: int = 25          # F: Number of frequency bands
     spatial_rows: int = 7              # R: Spatial grid rows
@@ -410,6 +416,17 @@ class VQAE(nn.Module):
             raise TypeError(f"config must be VQVAEConfig or dict, got {type(config)}")
         
         self.config = config
+        if config.use_cwt:
+            from packages.models.wavelet_head import CWTHead
+            self.cwt_head = CWTHead(
+                frequencies=config.cwt_frequencies,
+                fs=160,
+                num_channels=config.orig_channels,
+                bandwidth=1.0,
+                trainable=False
+            )
+        else:
+            self.cwt_head = None
 
         # Encoder stages
         self.encoder_2d = Encoder2DStage(config)
@@ -499,6 +516,9 @@ class VQAE(nn.Module):
             recon: Reconstructed EEG, shape (B*nChunk, OrigChannels, ChunkDim)
             losses: Dictionary of loss components
         """
+        # cwt preprocessing
+        if self.cwt_head is not None:
+            x = self.cwt_head(x)  # (B, F, R, C, T)
         # Encode
         z_e = self.encode(x)
         

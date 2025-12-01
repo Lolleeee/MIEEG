@@ -1,27 +1,43 @@
-import glob
-import logging
 import os
-import re
-from enum import Enum
-from typing import Dict
-
-import numpy as np
-import scipy.io as sio
-from dotenv import load_dotenv
-
-from packages.data_objects.signal import EegSignal, KinematicSignal
-from packages.io.output_packager import save_signal
-from packages.data_objects.dataset import TestTorchDataset
 from packages.plotting.napari_plots import raw_plot_spatial_eeg_tensor
-from packages.processing import misc, sensor_data, tensor_reshape, wavelet
-from packages.test import debug_constants, test_data_objects
+import copy
+import numpy as np
+from dotenv import load_dotenv
+import torch
+import tqdm
 
-load_dotenv()
+from packages.data_objects.dataset import FileDataset
 
-dataset_path = "/media/lolly/Bruh/WAYEEGGAL_dataset/WAYEEG_autoencoder"
 
-dataset = TestTorchDataset(root_folder=dataset_path, unpack_func='dict', nsamples=1, file_type='npz')
-signal = dataset[0]
-print(signal[:,0,0,:])
-#signal = EegSignal(unpacked_data = signal, fs=250, dim_dict={'frequencies': 0, 'rows': 1, 'cols': 2, 'time': 3}, patient=1, trial=1)
-raw_plot_spatial_eeg_tensor(signal.detach().numpy())
+
+
+base_folder = "/media/lolly/SSD/MotorImagery_Preprocessed/"
+
+def unpack(input):
+    return np.array(input["out_eeg"])
+
+loader = FileDataset(root_folder=base_folder, yield_identifiers=True, unpack_func=unpack)
+
+# Frequencies setup (unchanged)
+frequencies = np.concatenate([
+    np.linspace(1, 4, 3), np.linspace(4, 8, 5)[1:], 
+    np.linspace(8, 13, 8)[1:], np.linspace(13, 30, 10)[1:], 
+    np.linspace(30, 80, 8)[1:]
+])
+frequencies = tuple(frequencies.tolist())
+
+patient, trial, eeg_data = next(iter(loader))
+
+from packages.models.wavelet_head import CWTHead
+model = CWTHead(
+    frequencies=frequencies,
+    fs=160,
+    num_channels=32,
+    bandwidth=1.0,
+    trainable=False
+)
+out = model(torch.tensor(eeg_data).unsqueeze(0).float())  # (1, 2, 1, 7, 5, time)
+out = out[0, 0, ...]
+print("Output shape:", out.shape)
+# print(signal[:,0,0,:])
+raw_plot_spatial_eeg_tensor(out.detach().numpy())

@@ -62,12 +62,18 @@ CHANNELS_32 = np.array(
 
 if __name__ == "__main__":
     matrix = SPATIAL_DOMAIN_MATRIX_32
-    import torch
-
-    new_order_indices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 13, 9, 10, 11, 12, 18, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+    channel_to_index = {ch: i for i, ch in enumerate(CHANNELS_32)}
+    matrix_mapped = np.zeros(SPATIAL_DOMAIN_MATRIX_32.shape, dtype=int)
     
-    row_chan = CHANNELS_32[new_order_indices]
-    matrix = row_chan.reshape(matrix.shape)
+    for i in range(SPATIAL_DOMAIN_MATRIX_32.shape[0]):
+        for j in range(SPATIAL_DOMAIN_MATRIX_32.shape[1]):
+            ch = SPATIAL_DOMAIN_MATRIX_32[i, j]
+            if ch is not None:
+                matrix_mapped[i, j] = channel_to_index[ch]
+            else:
+                matrix_mapped[i, j] = -1
+    
+    matrix = matrix_mapped
     print(matrix)
 
     

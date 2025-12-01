@@ -1,3 +1,4 @@
+import sys
 import h5py
 import torch
 import numpy as np
@@ -80,7 +81,7 @@ def znorm(tensor: torch.Tensor, axes: tuple, eps: float = 1e-8) -> torch.Tensor:
 # Test Script
 if __name__ == "__main__":
     # 1. Inspect the file
-    file_path = "scripts/test_output/TEST/motor_eeg_dataset.h5"
+    file_path = "/media/lolly/SSD/motor_eeg_dataset_optimized.h5"
     
     print("=" * 60)
     print("OVERFITTING TEST - Single Sample")
@@ -90,6 +91,9 @@ if __name__ == "__main__":
     dataset = TorchH5Dataset(file_path)
     print(f"\nDataset: {len(dataset)} samples")
     
+    train, _ ,_  = get_data_loaders(dataset, norm_axes=(0,5), target_norm_axes=(0,2), batch_size=32, max_norm_samples=1000)
+
+    sys.exit()
     # Get single sample
     sample = dataset[0]
     single_input = sample['input'].unsqueeze(0)  # Add batch dim: (1, 2, 30, 7, 5, 80)
@@ -118,7 +122,8 @@ if __name__ == "__main__":
     from packages.models.vqae_light import VQAELight, VQAELightConfig
     
     config = VQAELightConfig(
-        use_quantizer=False  # Disable VQ for easier overfitting test
+        use_quantizer=False,  # Disable VQ for easier overfitting test
+        use_cwt=True
     )
     
     model = VQAELight(config)
