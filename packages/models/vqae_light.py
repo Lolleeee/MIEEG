@@ -12,6 +12,7 @@ class VQAELightConfig:
 
     # CWT parameters
     cwt_frequencies: tuple = None
+    chunk_samples: int = None  # If None, no chunking
 
     # Data shape parameters
     num_input_channels: int = 2   # Power + Phase
@@ -320,6 +321,7 @@ class VQAELight(nn.Module):
         self.config = config
         
         self.use_cwt = config.use_cwt
+        self.chunk_samples = config.chunk_samples
 
         if self.use_cwt:
             from packages.models.wavelet_head import CWTHead
@@ -328,7 +330,8 @@ class VQAELight(nn.Module):
                 fs=160,
                 num_channels=config.orig_channels,
                 n_cycles=5.0,
-                trainable=False
+                trainable=False,
+                chunk_samples=config.chunk_samples
             )
 
         self.encoder_2d = Encoder2DStageLight(config)
