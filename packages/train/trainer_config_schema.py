@@ -15,12 +15,13 @@ from packages.data_objects.dataset import TorchDataset, TestTorchDataset, TorchH
 from enum import Enum
 import json
 from pprint import pprint
-from packages.plotting.trainer_custom_plots import plot_raweeg_reconstruction 
+from packages.plotting.trainer_custom_plots import plot_raweeg_fft_reconstruction, plot_raweeg_reconstruction 
 
 
 # ===== String-based Enums =====
 class CustomPlotTypes(str, Enum):
     RECONSTRUCTIONS = "reconstructions"
+    RECONSTRUCTIONS_FREQ = "reconstructions_freq"
 
 class ModelType(str, Enum):
     SEQUENCE_VQAE_SKIP = "sequence_vqae_skip"
@@ -68,6 +69,7 @@ class AugmentationType(str, Enum):
 # ===== Mapping Dictionaries =====
 CUSTOM_PLOTS_MAP = {
     CustomPlotTypes.RECONSTRUCTIONS: plot_raweeg_reconstruction,
+    CustomPlotTypes.RECONSTRUCTIONS_FREQ: plot_raweeg_fft_reconstruction,
 }
 MODEL_MAP = {
     ModelType.VQVAE: VQVAE,
