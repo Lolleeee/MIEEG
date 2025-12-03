@@ -41,9 +41,15 @@ def main():
 ])
     frequencies = tuple(frequencies.tolist())
 
-    from scipy.signal import butter, sosfiltfilt
+    from scipy.signal import butter, sosfiltfilt, iirnotch, filtfilt
     sos = butter(4, [0.4, 79.9], btype='bandpass', fs=160, output='sos')
-    
+    fs = 160
+    f0 = 60.0  # Frequency to remove
+    Q = 30.0  # Quality factor
+    b, a = iirnotch(f0, Q, fs)
+
+# Apply filter
+
     for patient, trial, eeg_data in tqdm.tqdm(loader):
         
         EEG = EegSignal(
@@ -57,6 +63,7 @@ def main():
 
         EEG = tensor_reshape.segment_signal(EEG, window=640, overlap=0)
         EEG.signal = sosfiltfilt(sos, EEG.signal, axis=-1)
+        EEG.signal = filtfilt(b, a, EEG.signal)
         EEG.signal = EEG.signal.astype(np.float16)
 
         out = {'eeg': EEG}

@@ -303,16 +303,13 @@ class ResidualBlock1d(nn.Module):
         
         return out + identity
 
-
 class DecoderLight(nn.Module):
     def __init__(self, config: VQAELightConfig):
         super().__init__()
         self.config = config
         
-        # 1. Initial Projection (Latent -> Time Sequence)
-        # We need to map the scalar latent vector back to a time-series format.
-        # Start with a small time resolution (e.g. T/4 or T/8)
-        init_time = config.time_samples // 4 # Start at 1/4th resolution
+        # 1. Initial Projection
+        init_time = config.time_samples // 4
         self.init_channels = config.decoder_channels[0]
         self.init_dim = self.init_channels * init_time
         
@@ -322,48 +319,45 @@ class DecoderLight(nn.Module):
             nn.SiLU(inplace=True)
         )
         
-        # 2. Deep Upsampling Network
-        # We use Interpolate + ResidualBlock instead of ConvTranspose to avoid checkerboard artifacts
         layers = []
         in_channels = self.init_channels
         
-        # Stage 1: Refine features at low resolution
+        # Stage 1: Refine features (Norm is fine here)
         layers.append(ResidualBlock1d(in_channels, use_se=config.use_squeeze_excitation))
         
-        # Upsample Blocks
-        # Target: 1/4 -> 1/2 -> Full Resolution
-        upsample_stages = [config.decoder_channels[1], config.decoder_channels[-1]] # e.g., [32, 32]
+        # Stage 2: Upsampling
+        # Use ConvTranspose1d for sharpness (Peak preservation)
+        layers.append(nn.ConvTranspose1d(in_channels, config.decoder_channels[1], kernel_size=4, stride=2, padding=1))
+        in_channels = config.decoder_channels[1]
+        layers.append(nn.GroupNorm(min(config.num_groups, in_channels), in_channels))
+        layers.append(nn.SiLU(inplace=True))
+        layers.append(ResidualBlock1d(in_channels, use_se=config.use_squeeze_excitation)) # Norm OK here
         
-        for out_channels in upsample_stages:
-            layers.extend([
-                nn.Upsample(scale_factor=2, mode='linear', align_corners=False),
-                nn.Conv1d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
-                nn.GroupNorm(min(config.num_groups, out_channels), out_channels),
-                nn.SiLU(inplace=True),
-                # Add Residual Block for depth (Processing power)
-                ResidualBlock1d(out_channels, use_se=config.use_squeeze_excitation)
-            ])
-            in_channels = out_channels
-            
+        # Stage 3: Final Upsampling (REMOVE NORM HERE)
+        layers.append(nn.ConvTranspose1d(in_channels, config.decoder_channels[-1], kernel_size=4, stride=2, padding=1))
+        in_channels = config.decoder_channels[-1]
+        # NO GroupNorm here! Allow variance to explode if needed for peaks.
+        layers.append(nn.SiLU(inplace=True))
+        
+        # Residual Block WITHOUT Norm?
+        # Standard ResidualBlock has norm inside. 
+        # Let's use a simplified block or the standard one but rely on the final conv.
+        layers.append(ResidualBlock1d(in_channels, use_se=config.use_squeeze_excitation))
+        
         self.main_net = nn.Sequential(*layers)
         
-        # 3. Final Projection to EEG Channels
+        # 3. Final Projection
+        # Initialize with slightly higher std to encourage peaks?
         self.final_conv = nn.Conv1d(in_channels, config.orig_channels, kernel_size=3, padding=1)
+        nn.init.normal_(self.final_conv.weight, std=0.02) # Help it start active
         
     def forward(self, z_q):
         B = z_q.shape[0]
-        
-        # Project and Reshape
         x = self.projection(z_q)
-        x = x.view(B, self.init_channels, -1) # (B, 64, T/4)
+        x = x.view(B, self.init_channels, -1)
+        x = self.main_net(x)
+        x = self.final_conv(x)
         
-        # Deep Processing
-        x = self.main_net(x) # (B, 32, T)
-        
-        # Final Channel Mapping
-        x = self.final_conv(x) # (B, 32, T)
-        
-        # Safety check for time dimension (in case of rounding errors)
         if x.shape[-1] != self.config.time_samples:
             x = F.interpolate(x, size=self.config.time_samples, mode='linear', align_corners=False)
             
