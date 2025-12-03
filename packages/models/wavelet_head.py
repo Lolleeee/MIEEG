@@ -169,3 +169,33 @@ class CWTHead(nn.Module):
         x = x.view(-1, C, self.num_chunks*chunk_T)
         return x
 
+class InverseCWTHead(nn.Module):
+    def __init__(self, encoder_head):
+        super().__init__()
+        self.frequencies = encoder_head.frequencies
+        self.num_channels = encoder_head.num_channels
+        
+        # In_Channels: (32 * F * 2) -> Out_Channels: 32
+        in_ch = encoder_head.conv.out_channels
+        out_ch = encoder_head.num_channels
+        
+        self.inv_conv = nn.ConvTranspose1d(
+            in_channels=in_ch, out_channels=out_ch,
+            kernel_size=encoder_head.conv.kernel_size,
+            padding=encoder_head.conv.padding,
+            groups=encoder_head.num_channels, 
+            bias=False
+        )
+        # Reuse weights (Fixed Physics)
+        self.inv_conv.weight.data = encoder_head.conv.weight.data
+        self.inv_conv.weight.requires_grad = False 
+        
+        # Learnable scaling to fix amplitude loss
+        self.scale = nn.Parameter(torch.ones(1, out_ch, 1))
+
+    def forward(self, x):
+        # x: (B, 32*F*2, T) -> Spectrogram Coefficients
+        out = self.inv_conv(x)
+        return out * self.scale
+
+
