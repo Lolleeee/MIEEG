@@ -359,9 +359,12 @@ class VQAELight(nn.Module):
     def encode(self, x):
         B, Ch, F, R, C, T = x.shape
         x = x.permute(0, 3, 4, 1, 2, 5).reshape(B * R * C, Ch, F, T)
+        
         x = self.encoder_2d(x)
+        
         C_out, F_out, T_out = x.shape[1], x.shape[2], x.shape[3]
         x = x.view(B, R, C, C_out, F_out, T_out).permute(0, 3, 4, 1, 2, 5).reshape(B, C_out * F_out, R, C, T_out)
+        
         return self.encoder_3d(x)
     
     def decode(self, z_q):
@@ -391,7 +394,7 @@ class VQAELight(nn.Module):
             vq_losses = {'vq_loss': torch.tensor(0.), 'perplexity': torch.tensor(0.), 'codebook_usage': torch.tensor(1.)}
         
         recon = self.decode(z_q)
-
+        
         # Unchunk logic for original EEG
         if self.use_cwt and self.chunk_samples is not None:
             recon = self.cwt_head.unchunk_raw_eeg(recon) 
@@ -416,4 +419,4 @@ if __name__ == "__main__":
     x = torch.randn(1, 32, 640)
     with torch.no_grad(): out = model(x)
     print(f"Input: {x.shape}, Recon: {out['reconstruction'].shape}")
-    print(out)
+    # print(model)

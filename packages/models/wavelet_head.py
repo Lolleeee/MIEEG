@@ -14,17 +14,17 @@ class CWTHead(nn.Module):
         num_channels: int = 32,
         n_cycles: float = 6.0,
         trainable: bool = False,
-        chunk_samples: int = None 
+        chunk_samples: int = None,
+        use_log_compression: bool = True  # NEW: Toggle log scaling
     ):
         super().__init__()
         self.num_channels = num_channels
         self.frequencies = frequencies
         self.num_freqs = len(frequencies)
-        self.chunk_size_samples = chunk_samples 
+        self.chunk_size_samples = chunk_samples
+        self.use_log_compression = use_log_compression  # Store flag
         
         # 1. Setup Filters (Corrected for Dynamic Cycles)
-        # We need to calculate sigma_max using the same logic as create_weights
-        # At lowest freq (e.g. 1Hz), we might scale down cycles to 2.0
         f_min = np.min(frequencies)
         if f_min < 4.0:
             cycles_at_min = max(2.0, n_cycles * (f_min / 4.0))
@@ -32,11 +32,8 @@ class CWTHead(nn.Module):
             cycles_at_min = n_cycles
             
         sigma_max = cycles_at_min / (2 * np.pi * f_min)
-        
-        # Kernel size: 8 sigmas covers >99.9% of energy
         kernel_size = int(8 * sigma_max * fs) 
         if kernel_size % 2 == 0: kernel_size += 1 
-        
         padding = kernel_size // 2 
         
         # 2. Convolution Layer
@@ -50,7 +47,6 @@ class CWTHead(nn.Module):
             bias=False
         )
         
-        # Pass n_cycles_max to the weight creator
         weights = self._create_morlet_weights(frequencies, fs, kernel_size, n_cycles_max=n_cycles)
         self.conv.weight.data = weights
         self.conv.weight.requires_grad = trainable
@@ -78,18 +74,28 @@ class CWTHead(nn.Module):
         self.grid_h, self.grid_w = 7, 5
 
     def forward_pre_chunk(self, x):
-        """Standard CWT Forward Pass (No splitting)."""
+        """Standard CWT Forward Pass with optional log-compression."""
         B, C, T = x.shape
 
-        cwt_raw = self.conv(x) # (B, 32*F*2, T)
+        cwt_raw = self.conv(x)  # (B, 32*F*2, T)
         cwt_reshaped = cwt_raw.view(B, C, self.num_freqs, 2, T)
         
         real = cwt_reshaped[..., 0, :] 
         imag = cwt_reshaped[..., 1, :] 
         
-        mag = torch.sqrt(real.pow(2) + imag.pow(2))
+        # Calculate Magnitude
+        mag = torch.sqrt(real.pow(2) + imag.pow(2) + 1e-8)
+        
+        # === LOG COMPRESSION (TOGGLEABLE) ===
+        if self.use_log_compression:
+            # log1p = log(1 + x) is numerically stable for small values
+            # This compresses 1/f distribution while preserving relative ratios
+            mag = torch.log1p(mag)
+        
+        # Phase (always computed normally)
         phase = torch.atan2(imag, real)
         
+        # Stack and permute
         features = torch.stack([mag, phase], dim=-1)
         features = features.permute(0, 4, 2, 1, 3)
         
@@ -120,37 +126,22 @@ class CWTHead(nn.Module):
         return output
 
     def _create_morlet_weights(self, freqs, fs, K, n_cycles_max=6.0):
-        """
-        Creates Morlet kernels with Dynamic Cycle Scaling for low frequencies.
-        This allows low-frequency wavelets (0.5-4Hz) to fit inside 4s windows.
-        """
+        """Creates Morlet kernels with Dynamic Cycle Scaling for low frequencies."""
         weights = torch.zeros(self.num_channels * self.num_freqs * 2, 1, K)
         t = np.linspace(-K/2/fs, K/2/fs, K)
         
         for i, f in enumerate(freqs):
-            # --- DYNAMIC CYCLE SCALING (IMPROVED) ---
-            # At 0.5Hz: cycles = 3.0 (fits in ~6s, okay for 4s window with padding)
-            # At 1.0Hz: cycles = 4.0 (fits in 4s window)
-            # At 4.0Hz: cycles = 6.0 (full resolution)
-            # Above 4Hz: cycles = 6.0 (stays at max)
-            
             if f < 1.0:
-                # Scale from 3.0 at 0.5Hz to 4.0 at 1.0Hz
                 cycles = 3.0 + (f / 1.0) * (4.0 - 3.0)
             elif f < 4.0:
-                # Scale from 4.0 at 1Hz to 6.0 at 4Hz
                 cycles = 4.0 + ((f - 1.0) / 3.0) * (6.0 - 4.0)
             else:
-                # Full resolution for high frequencies
                 cycles = n_cycles_max
                 
             sigma = cycles / (2 * np.pi * f)
-            
             sine = np.exp(2j * np.pi * f * t)
             gauss = np.exp(-t**2 / (2 * sigma**2))
             wavelet = sine * gauss
-            
-            # Normalize
             wavelet /= np.linalg.norm(wavelet)
             
             for c in range(self.num_channels):
@@ -174,6 +165,10 @@ class InverseCWTHead(nn.Module):
         super().__init__()
         self.frequencies = encoder_head.frequencies
         self.num_channels = encoder_head.num_channels
+        self.num_freqs = encoder_head.num_freqs
+        
+        # Check if encoder uses log compression
+        self.use_log_compression = getattr(encoder_head, 'use_log_compression', False)
         
         # In_Channels: (32 * F * 2) -> Out_Channels: 32
         in_ch = encoder_head.conv.out_channels
@@ -186,16 +181,39 @@ class InverseCWTHead(nn.Module):
             groups=encoder_head.num_channels, 
             bias=False
         )
-        # Reuse weights (Fixed Physics)
+        
         self.inv_conv.weight.data = encoder_head.conv.weight.data
         self.inv_conv.weight.requires_grad = False 
-        
-        # Learnable scaling to fix amplitude loss
         self.scale = nn.Parameter(torch.ones(1, out_ch, 1))
 
     def forward(self, x):
-        # x: (B, 32*F*2, T) -> Spectrogram Coefficients
-        out = self.inv_conv(x)
+        # x: (B, 32*F*2, T) -> Flat output from Decoder
+        B, C_total, T = x.shape
+        
+        # 1. Reshape to [Batch, Channel, Freq, 2 (Mag/Phase), Time]
+        # This assumes Decoder learned to output [Mag, Phase] pairs in order
+        x_reshaped = x.view(B, self.num_channels, self.num_freqs, 2, T)
+        
+        mag = x_reshaped[..., 0, :]
+        phase = x_reshaped[..., 1, :]
+        
+        # 2. Invert Log Compression (Linearize Magnitude)
+        if self.use_log_compression:
+            mag = torch.expm1(mag) # exp(x) - 1
+            
+        # 3. Convert Polar -> Rectangular (Real, Imag)
+        # We need Real/Imag because inv_conv weights are Morlet (Real/Imag)
+        real = mag * torch.cos(phase)
+        imag = mag * torch.sin(phase)
+        
+        # 4. Re-Stack to [Batch, 32*F*2, Time]
+        # Interleave Real/Imag: [R, I, R, I...]
+        rect_features = torch.stack([real, imag], dim=3)
+        rect_flat = rect_features.view(B, C_total, T)
+        
+        # 5. Inverse CWT
+        out = self.inv_conv(rect_flat)
+        
         return out * self.scale
 
 
