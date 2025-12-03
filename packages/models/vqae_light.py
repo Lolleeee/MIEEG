@@ -394,12 +394,7 @@ class VQAELight(nn.Module):
 
         # Unchunk logic for original EEG
         if self.use_cwt and self.chunk_samples is not None:
-            # recon is (B_total, 32, T_chunk)
-            # We need to stitch it back to match input 'x' for loss calculation
-            # But usually loss is calculated per chunk.
-            # For visualization/metrics, we can use:
-            # recon = self.cwt_head.unchunk_raw_eeg(recon) 
-            pass
+            recon = self.cwt_head.unchunk_raw_eeg(recon) 
 
         return {
             'reconstruction': recon,
