@@ -199,7 +199,7 @@ class VQAE23Loss(TorchLoss):
     def __init__(
         self,
         recon_weight: float = 1.0,
-        freq_weight: float = 0.5,       # Weight for frequency loss
+        freq_weight: float = 1.0,       # Weight for frequency loss
         bottleneck_var_weight: float = 0.1,
         bottleneck_cov_weight: float = 0.1,
         fs: int = 160,
@@ -276,17 +276,9 @@ class VQAE23Loss(TorchLoss):
 
     def _frequency_loss(self, recon, target):
         """
-        More stable spectral loss: Magnitude difference (not Power) + Log-Cosh.
-        Handles single samples gracefully.
-        
-        Args:
-            recon: Reconstructed signal (B, Channels, Time)
-            target: Target signal (B, Channels, Time)
-            
-        Returns:
-            Frequency loss (scalar tensor)
+        Log-Spectral Distance: Measures relative error (dB).
+        This CRITICALLY boosts high-frequency reconstruction.
         """
-        # Handle single sample case - return zero if no bands defined
         if recon.size(0) <= 1 and len(self.band_bins) == 0:
             return torch.tensor(0.0, device=recon.device)
         
@@ -294,44 +286,37 @@ class VQAE23Loss(TorchLoss):
         recon_fft = torch.fft.rfft(recon, dim=-1)
         target_fft = torch.fft.rfft(target, dim=-1)
         
-        # Use MAGNITUDE (amplitude), not Power (amplitude^2)
-        # Power ^2 explodes gradients for large values and vanishes for small ones
-        recon_mag = torch.abs(recon_fft)
-        target_mag = torch.abs(target_fft)
+        # Magnitude
+        recon_mag = torch.abs(recon_fft) + 1e-8
+        target_mag = torch.abs(target_fft) + 1e-8
+        
+        # === FIX: USE LOG MAGNITUDE ===
+        recon_log = torch.log(recon_mag)
+        target_log = torch.log(target_mag)
         
         total_freq_loss = 0.0
         total_weight = 0.0
         
         for band, (low, high, weight) in self.band_bins.items():
-            # Ensure valid band range
-            if low >= high or high > recon_mag.size(-1):
-                continue
+            if low >= high or high > recon_mag.size(-1): continue
             
-            # Extract band
-            recon_band = recon_mag[..., low:high]
-            target_band = target_mag[..., low:high]
+            # Extract Log-Bands
+            recon_band = recon_log[..., low:high]
+            target_band = target_log[..., low:high]
             
-            # Skip if band is empty
-            if recon_band.numel() == 0:
-                continue
+            if recon_band.numel() == 0: continue
             
-            # Log-Cosh loss: behaves like L2 for small errors, L1 for large errors
-            # Much smoother gradients than MSE on Log
-            diff = recon_band - target_band
-            
-            # Clamp to avoid overflow in cosh (cosh(x) explodes for x > ~88)
-            diff = torch.clamp(diff, -10, 10)
-            
-            band_loss = torch.log(torch.cosh(diff) + 1e-8).mean()
+            # L1 or MSE on Log-Domain
+            # This equals "Mean Absolute Log Error" (Ratio Error)
+            band_loss = F.l1_loss(recon_band, target_band)
             
             total_freq_loss += weight * band_loss
             total_weight += weight
         
-        # Handle case where no valid bands were processed
-        if total_weight < 1e-8:
-            return torch.tensor(0.0, device=recon.device)
+        if total_weight < 1e-8: return torch.tensor(0.0, device=recon.device)
             
         return total_freq_loss / total_weight
+
 
     def _compute_loss(self, outputs: Dict, batch: dict) -> Dict:
         assert 'target' in batch, "Batch must contain 'target' for VQAE23Loss"
