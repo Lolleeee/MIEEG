@@ -366,7 +366,7 @@ class VQAELight(nn.Module):
     
     def decode(self, z_q):
         x = self.decoder(z_q) # (B, Out_Channels, T)
-        print(x.shape)
+        
         # If Inverse CWT is ON, pass through head
         if self.use_cwt and self.config.use_inverse_cwt:
             x = self.inv_cwt_head(x) # (B, 32, T)
