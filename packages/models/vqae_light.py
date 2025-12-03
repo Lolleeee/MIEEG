@@ -438,7 +438,7 @@ class VQAELight(nn.Module):
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         if self.use_cwt:
             x = self.cwt_head(x)  # (B, 2, F, 7, 5, T)
-        print(x.shape)
+        
         z_e = self.encode(x)
 
         if self.config.use_quantizer:
