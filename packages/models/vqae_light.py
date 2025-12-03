@@ -261,53 +261,114 @@ class Encoder3DStageLight(nn.Module):
         x = self.projection(x)
         return x
 
+class ResidualBlock1d(nn.Module):
+    """
+    Powerful 1D Residual Block with Depthwise Separable Convs + SE + GroupNorm.
+    Matches the Encoder's complexity.
+    """
+    def __init__(self, channels: int, kernel_size=3, use_se=True, norm_groups=8):
+        super().__init__()
+        padding = kernel_size // 2
+        
+        self.conv1 = nn.Conv1d(channels, channels, kernel_size, padding=padding, groups=channels, bias=False)
+        self.pointwise1 = nn.Conv1d(channels, channels, 1, bias=False)
+        self.norm1 = nn.GroupNorm(norm_groups, channels)
+        self.act = nn.SiLU(inplace=True)
+        
+        self.conv2 = nn.Conv1d(channels, channels, kernel_size, padding=padding, groups=channels, bias=False)
+        self.pointwise2 = nn.Conv1d(channels, channels, 1, bias=False)
+        self.norm2 = nn.GroupNorm(norm_groups, channels)
+        
+        self.se = nn.Sequential(
+            nn.AdaptiveAvgPool1d(1),
+            nn.Conv1d(channels, max(8, channels // 4), 1),
+            nn.SiLU(inplace=True),
+            nn.Conv1d(max(8, channels // 4), channels, 1),
+            nn.Sigmoid()
+        ) if use_se else nn.Identity()
+
+    def forward(self, x):
+        identity = x
+        
+        out = self.conv1(x)
+        out = self.pointwise1(out)
+        out = self.norm1(out)
+        out = self.act(out)
+        
+        out = self.conv2(out)
+        out = self.pointwise2(out)
+        out = self.norm2(out)
+        
+        out = self.se(out)
+        
+        return out + identity
+
 
 class DecoderLight(nn.Module):
     def __init__(self, config: VQAELightConfig):
         super().__init__()
         self.config = config
         
-        # Initial projection based on fixed time_samples
-        init_time = config.time_samples // (2 ** len(config.decoder_channels))
-        init_channels = config.decoder_channels[0]
-        self.init_dim = init_channels * init_time
+        # 1. Initial Projection (Latent -> Time Sequence)
+        # We need to map the scalar latent vector back to a time-series format.
+        # Start with a small time resolution (e.g. T/4 or T/8)
+        init_time = config.time_samples // 4 # Start at 1/4th resolution
+        self.init_channels = config.decoder_channels[0]
+        self.init_dim = self.init_channels * init_time
         
         self.projection = nn.Sequential(
             nn.Linear(config.embedding_dim, self.init_dim, bias=False),
             nn.LayerNorm(self.init_dim),
-            nn.Dropout(p=0.1),
             nn.SiLU(inplace=True)
         )
         
+        # 2. Deep Upsampling Network
+        # We use Interpolate + ResidualBlock instead of ConvTranspose to avoid checkerboard artifacts
         layers = []
-        in_channels = init_channels
+        in_channels = self.init_channels
         
-        for i, out_channels in enumerate(config.decoder_channels[1:]):
+        # Stage 1: Refine features at low resolution
+        layers.append(ResidualBlock1d(in_channels, use_se=config.use_squeeze_excitation))
+        
+        # Upsample Blocks
+        # Target: 1/4 -> 1/2 -> Full Resolution
+        upsample_stages = [config.decoder_channels[1], config.decoder_channels[-1]] # e.g., [32, 32]
+        
+        for out_channels in upsample_stages:
             layers.extend([
-                nn.ConvTranspose1d(in_channels, out_channels, kernel_size=3, stride=2, padding=1, bias=False),
-                nn.GroupNorm(min(config.num_groups, out_channels), out_channels) if config.use_group_norm else nn.BatchNorm1d(out_channels),
-                nn.SiLU(inplace=True)
+                nn.Upsample(scale_factor=2, mode='linear', align_corners=False),
+                nn.Conv1d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+                nn.GroupNorm(min(config.num_groups, out_channels), out_channels),
+                nn.SiLU(inplace=True),
+                # Add Residual Block for depth (Processing power)
+                ResidualBlock1d(out_channels, use_se=config.use_squeeze_excitation)
             ])
-            if i < len(config.decoder_channels[1:]) - 1:
-                layers.append(nn.Dropout(p=config.dropout_decoder))
             in_channels = out_channels
+            
+        self.main_net = nn.Sequential(*layers)
         
-        # Final layer
-        layers.append(nn.ConvTranspose1d(in_channels, config.orig_channels, kernel_size=4, stride=2, padding=1))
+        # 3. Final Projection to EEG Channels
+        self.final_conv = nn.Conv1d(in_channels, config.orig_channels, kernel_size=3, padding=1)
         
-        self.decoder_net = nn.Sequential(*layers)
-    
     def forward(self, z_q):
         B = z_q.shape[0]
-        x = self.projection(z_q)
-        x = x.view(B, self.config.decoder_channels[0], -1)
-        x = self.decoder_net(x)
         
-        # Ensure exact output size match
+        # Project and Reshape
+        x = self.projection(z_q)
+        x = x.view(B, self.init_channels, -1) # (B, 64, T/4)
+        
+        # Deep Processing
+        x = self.main_net(x) # (B, 32, T)
+        
+        # Final Channel Mapping
+        x = self.final_conv(x) # (B, 32, T)
+        
+        # Safety check for time dimension (in case of rounding errors)
         if x.shape[-1] != self.config.time_samples:
             x = F.interpolate(x, size=self.config.time_samples, mode='linear', align_corners=False)
-        
+            
         return x
+
 
 
 class VQAELight(nn.Module):
@@ -377,7 +438,7 @@ class VQAELight(nn.Module):
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         if self.use_cwt:
             x = self.cwt_head(x)  # (B, 2, F, 7, 5, T)
-
+        print(x.shape)
         z_e = self.encode(x)
 
         if self.config.use_quantizer:
@@ -408,17 +469,20 @@ if __name__ == "__main__":
     
     config = VQAELightConfig(
         num_input_channels=2,
-        num_freq_bands=30,
+        num_freq_bands=25,
         spatial_rows=7,
         spatial_cols=5,
         time_samples=80,
         use_group_norm=True,
         use_squeeze_excitation=True,
-        use_residual=True
+        use_residual=True, 
+        use_cwt=True,
+        chunk_samples=80
+
     )
     
     model = VQAELight(config)
-    x = torch.randn(2, 2, 30, 7, 5, 640)
+    x = torch.randn(1, 32, 640)
     
     with torch.no_grad():
         out = model(x)

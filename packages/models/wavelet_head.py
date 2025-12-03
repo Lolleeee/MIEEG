@@ -168,3 +168,4 @@ class CWTHead(nn.Module):
             return x
         x = x.view(-1, C, self.num_chunks*chunk_T)
         return x
+
