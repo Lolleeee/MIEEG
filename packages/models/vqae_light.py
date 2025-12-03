@@ -175,24 +175,58 @@ class Encoder2DStageLight(nn.Module):
         self.config = config
         layers = []
         in_channels = config.num_input_channels
+        
         for i, out_channels in enumerate(config.encoder_2d_channels):
-            if config.use_separable_conv and i > 0:
-                conv = DepthwiseSeparableConv2d(in_channels, out_channels, 3, 2, 1, use_se=config.use_squeeze_excitation)
+            # --- NEW STRIDING LOGIC ---
+            # Layer 0: Stride=(1, 1) -> De-blurring / Sharpening
+            # Layer 1+: Stride=(1, 2) -> Compress Time, Preserve Freq
+            if i == 0:
+                stride = (1, 1)
             else:
-                conv = nn.Conv2d(in_channels, out_channels, 3, 2, 1, bias=False)
+                stride = (1, 2)
+            
+            # Select Conv Type
+            if config.use_separable_conv and i > 0:
+                conv = DepthwiseSeparableConv2d(
+                    in_channels, out_channels, 
+                    kernel_size=3, stride=stride, padding=1, 
+                    use_se=config.use_squeeze_excitation
+                )
+            else:
+                conv = nn.Conv2d(
+                    in_channels, out_channels, 
+                    kernel_size=3, stride=stride, padding=1, 
+                    bias=False
+                )
+            
             norm = nn.GroupNorm(min(config.num_groups, out_channels), out_channels) if config.use_group_norm else nn.BatchNorm2d(out_channels)
             se = SqueezeExcitation2D(out_channels) if config.use_squeeze_excitation and not (config.use_separable_conv and i > 0) else nn.Identity()
+            
             layers.extend([conv, norm, nn.SiLU(inplace=True), se])
-            if i < len(config.encoder_2d_channels) - 1: layers.append(nn.Dropout2d(p=config.dropout_2d))
+            if i < len(config.encoder_2d_channels) - 1:
+                layers.append(nn.Dropout2d(p=config.dropout_2d))
+                
             in_channels = out_channels
+            
         self.conv_net = nn.Sequential(*layers)
+        
+        # --- CORRECT OUTPUT DIM CALCULATION ---
         self.freq_out = config.num_freq_bands
         self.time_out = config.time_samples
-        for _ in config.encoder_2d_channels:
-            self.freq_out = (self.freq_out + 1) // 2
-            self.time_out = (self.time_out + 1) // 2
+        
+        for i in range(len(config.encoder_2d_channels)):
+            if i == 0:
+                # Stride (1, 1): No change
+                pass 
+            else:
+                # Stride (1, 2): Freq same, Time / 2
+                self.time_out = (self.time_out + 1) // 2
+
         self.out_channels = config.encoder_2d_channels[-1]
-    def forward(self, x): return self.conv_net(x)
+
+    def forward(self, x):
+        return self.conv_net(x)
+
 
 class Encoder3DStageLight(nn.Module):
     def __init__(self, config: VQAELightConfig, channels_in: int, time_in: int):
@@ -361,7 +395,7 @@ class VQAELight(nn.Module):
         x = x.permute(0, 3, 4, 1, 2, 5).reshape(B * R * C, Ch, F, T)
         
         x = self.encoder_2d(x)
-        
+    
         C_out, F_out, T_out = x.shape[1], x.shape[2], x.shape[3]
         x = x.view(B, R, C, C_out, F_out, T_out).permute(0, 3, 4, 1, 2, 5).reshape(B, C_out * F_out, R, C, T_out)
         
@@ -419,4 +453,4 @@ if __name__ == "__main__":
     x = torch.randn(1, 32, 640)
     with torch.no_grad(): out = model(x)
     print(f"Input: {x.shape}, Recon: {out['reconstruction'].shape}")
-    # print(model)
+    print(model)
