@@ -519,6 +519,7 @@ class VQAE(nn.Module):
         # cwt preprocessing
         if self.cwt_head is not None:
             x = self.cwt_head(x)  # (B, F, R, C, T)
+            target = x
         # Encode
         z_e = self.encode(x)
         
@@ -534,7 +535,7 @@ class VQAE(nn.Module):
         recon = self.decode(z_q)
 
         recon = recon.reshape(-1, self.config.orig_channels, self.config.time_samples)  
-        return {'reconstruction': recon, 'embeddings': z_e, 'vq_loss': vq_losses['vq_loss']}
+        return {'reconstruction': recon, 'embeddings': z_e, 'vq_loss': vq_losses['vq_loss'], 'target': target}
     
     def _chunk_time(self, x: torch.Tensor) -> torch.Tensor:
         """

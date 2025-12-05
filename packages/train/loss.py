@@ -189,184 +189,169 @@ class SequenceVQVAELoss(TorchLoss):
 
 class VQAE23Loss(TorchLoss):
     """
-    Enhanced VQ-VAE Loss for Motor EEG.
-    Combines:
-    1. Time-domain reconstruction (MSE)
-    2. Band-weighted Frequency-domain reconstruction (Spectral loss)
-    3. VQ commitment/codebook loss
-    4. Bottleneck regularization (variance + decorrelation)
+    Fixed version with absolute magnitude calibration.
     """
     def __init__(
         self,
-        recon_weight: float = 1.0,
-        freq_weight: float = 1.0,       # Weight for frequency loss
+        mse_weight: float = 1.0,
+        magnitude_weight: float = 1.0,
+        phase_weight: float = 0.3,
+        power_weight: float = 0.5,  # NEW: enforce absolute power
         bottleneck_var_weight: float = 0.1,
         bottleneck_cov_weight: float = 0.1,
         fs: int = 160,
-        time_samples: int = 80,
-        motor_bands: dict = None
+        n_fft: int = 512,
+        phase_magnitude_threshold: float = 0.01
     ):
         super().__init__(
             expected_model_output_keys=['reconstruction', 'embeddings', 'vq_loss'], 
             expected_loss_keys=[
-                'loss', 'recon_loss', 'freq_loss', 'vq_loss', 
-                'bottleneck_loss', 'bottleneck_var_loss', 'bottleneck_cov_loss'
+                'loss', 'mse_loss', 'magnitude_loss', 'phase_loss', 
+                'power_loss', 'vq_loss', 'bottleneck_loss'
             ]
         )
-        self.name = "VQAE23Loss"
-        self.recon_weight = recon_weight
-        self.freq_weight = freq_weight
+        self.name = "OptimalVQAELoss"
+        
+        self.mse_weight = mse_weight
+        self.magnitude_weight = magnitude_weight
+        self.phase_weight = phase_weight
+        self.power_weight = power_weight  # NEW
         self.bottleneck_var_weight = bottleneck_var_weight
         self.bottleneck_cov_weight = bottleneck_cov_weight
         
-        # Frequency configuration
         self.fs = fs
-        self.n_fft = time_samples
-        freq_res = fs / time_samples
-        
-        # Motor-relevant bands (Hz)
-        # Weight alpha (8-13) and beta (13-30) higher for motor tasks
-        self.motor_bands = motor_bands or {
-            'delta': (1, 4, 0.5),
-            'theta': (4, 8, 0.8),
-            'alpha': (8, 13, 2.0),   # Critical for motor
-            'beta': (13, 30, 2.0),   # Critical for motor
-            'gamma': (30, 45, 1.0)
-        }
-        
-        # Precompute FFT bins for each band
-        self.band_bins = {}
-        for band, (low, high, weight) in self.motor_bands.items():
-            low_bin = int(low / freq_res)
-            high_bin = int(high / freq_res)
-            # Ensure valid indices
-            if high_bin > (time_samples // 2 + 1):
-                high_bin = time_samples // 2 + 1
-            if low_bin < high_bin:
-                self.band_bins[band] = (low_bin, high_bin, weight)
+        self.n_fft = n_fft
+        self.phase_magnitude_threshold = phase_magnitude_threshold
 
-    def _bottleneck_decorrelation_loss(self, embeddings):
-        """Penalize correlation between embedding dimensions."""
-        # Only compute if batch size > 1
-        if embeddings.size(0) <= 1:
-            return torch.tensor(0.0, device=embeddings.device)
+
+    def _magnitude_loss(self, recon, target):
+        """Relative spectral shape (scale-invariant)."""
+        recon_fft = torch.fft.rfft(recon, n=self.n_fft, dim=-1)
+        target_fft = torch.fft.rfft(target, n=self.n_fft, dim=-1)
         
-        z_mean = embeddings.mean(dim=0)
+        recon_psd = torch.abs(recon_fft) ** 2
+        target_psd = torch.abs(target_fft) ** 2
+        
+        # Normalize (scale-invariant)
+        recon_psd_norm = recon_psd / (recon_psd.sum(dim=-1, keepdim=True) + 1e-8)
+        target_psd_norm = target_psd / (target_psd.sum(dim=-1, keepdim=True) + 1e-8)
+        
+        recon_log = torch.log(recon_psd_norm + 1e-10)
+        target_log = torch.log(target_psd_norm + 1e-10)
+        
+        return F.l1_loss(recon_log, target_log)
+
+
+    def _power_loss(self, recon, target):
+        """
+        NEW: Absolute power/energy constraint.
+        Forces model to match the global amplitude.
+        """
+        recon_fft = torch.fft.rfft(recon, n=self.n_fft, dim=-1)
+        target_fft = torch.fft.rfft(target, n=self.n_fft, dim=-1)
+        
+        # Total power (Parseval's theorem: sum of PSD)
+        recon_power = torch.sum(torch.abs(recon_fft) ** 2, dim=-1)
+        target_power = torch.sum(torch.abs(target_fft) ** 2, dim=-1)
+        
+        # L1 loss on log-power (scale-aware)
+        return F.l1_loss(torch.log(recon_power + 1e-8), 
+                        torch.log(target_power + 1e-8))
+
+
+    def _phase_loss(self, recon, target):
+        """Phase coherence (unchanged)."""
+        recon_fft = torch.fft.rfft(recon, n=self.n_fft, dim=-1)
+        target_fft = torch.fft.rfft(target, n=self.n_fft, dim=-1)
+        
+        target_psd = torch.abs(target_fft) ** 2
+        target_power_total = target_psd.sum(dim=-1, keepdim=True) + 1e-8
+        target_psd_norm = target_psd / target_power_total
+        phase_mask = (target_psd_norm > self.phase_magnitude_threshold).float()
+        
+        recon_mag = torch.abs(recon_fft) + 1e-8
+        target_mag = torch.abs(target_fft) + 1e-8
+        
+        complex_corr = torch.real(
+            (recon_fft * torch.conj(target_fft)) / (recon_mag * target_mag)
+        )
+        
+        phase_error = (1.0 - complex_corr) * phase_mask
+        
+        return phase_error.sum() / (phase_mask.sum() + 1e-8)
+
+
+    def _bottleneck_regularization(self, embeddings):
+        """Combined variance + decorrelation (unchanged)."""
+        if embeddings is None or embeddings.size(0) <= 1:
+            return torch.tensor(0.0, device=embeddings.device if embeddings is not None else 'cpu')
+        
+        std = torch.sqrt(embeddings.var(dim=0, unbiased=False) + 1e-4)
+        var_loss = torch.mean(torch.relu(1.0 - std))
+        
+        z_mean = embeddings.mean(dim=0, keepdim=True)
         z_centered = embeddings - z_mean
-        
-        # Use unbiased=False to avoid division by zero warning
         z_std = z_centered.std(dim=0, unbiased=False, keepdim=True) + 1e-8
         z_normalized = z_centered / z_std
         
         correlation = torch.mm(z_normalized.t(), z_normalized) / embeddings.size(0)
         identity = torch.eye(embeddings.size(1), device=embeddings.device)
-        return torch.mean((correlation - identity) ** 2)
-
-    def _bottleneck_variance_loss(self, embeddings, eps=1e-4):
-        """Encourage variance in embedding dimensions (prevent collapse)."""
-        # Only compute if batch size > 1
-        if embeddings.size(0) <= 1:
-            return torch.tensor(0.0, device=embeddings.device)
+        decorr_loss = torch.mean((correlation - identity) ** 2)
         
-        # Use unbiased=False to avoid division by zero warning
-        std = torch.sqrt(embeddings.var(dim=0, unbiased=False) + eps)
-        
-        # Hinge loss: penalty if std < 1
-        return torch.mean(torch.relu(1 - std))
-
-    def _frequency_loss(self, recon, target):
-        """
-        Log-Spectral Distance: Measures relative error (dB).
-        This CRITICALLY boosts high-frequency reconstruction.
-        """
-        if recon.size(0) <= 1 and len(self.band_bins) == 0:
-            return torch.tensor(0.0, device=recon.device)
-        
-        # FFT
-        recon_fft = torch.fft.rfft(recon, dim=-1)
-        target_fft = torch.fft.rfft(target, dim=-1)
-        
-        # Magnitude
-        recon_mag = torch.abs(recon_fft) + 1e-8
-        target_mag = torch.abs(target_fft) + 1e-8
-        
-        # === FIX: USE LOG MAGNITUDE ===
-        recon_log = torch.log(recon_mag)
-        target_log = torch.log(target_mag)
-        
-        total_freq_loss = 0.0
-        total_weight = 0.0
-        
-        for band, (low, high, weight) in self.band_bins.items():
-            if low >= high or high > recon_mag.size(-1): continue
-            
-            # Extract Log-Bands
-            recon_band = recon_log[..., low:high]
-            target_band = target_log[..., low:high]
-            
-            if recon_band.numel() == 0: continue
-            
-            # L1 or MSE on Log-Domain
-            # This equals "Mean Absolute Log Error" (Ratio Error)
-            band_loss = F.l1_loss(recon_band, target_band)
-            
-            total_freq_loss += weight * band_loss
-            total_weight += weight
-        
-        if total_weight < 1e-8: return torch.tensor(0.0, device=recon.device)
-            
-        return total_freq_loss / total_weight
+        return self.bottleneck_var_weight * var_loss + self.bottleneck_cov_weight * decorr_loss
 
 
-    def _compute_loss(self, outputs: Dict, batch: dict) -> Dict:
-        assert 'target' in batch, "Batch must contain 'target' for VQAE23Loss"
-
-        target = batch['target']  # (B, 32, 80)
-        recon = outputs['reconstruction']
-        embeddings = outputs['embeddings']
-        vq_loss = outputs.get('vq_loss', torch.tensor(0., device=target.device))
+    def _compute_loss(self, outputs: dict, batch: dict) -> dict:
+        """Main loss computation."""
+        target = batch['target']  # (B, 32, 640)
+        recon = outputs['reconstruction']  # (B, 32, 640)
+        embeddings = outputs.get('embeddings', None)
+        vq_loss = outputs.get('vq_loss', torch.tensor(0.0, device=target.device))
         
-        # 1. Time-domain Reconstruction
-        recon_loss = F.mse_loss(recon, target)
+        # Time-domain MSE
+        mse_loss = F.mse_loss(recon, target)
         
-        # 2. Frequency-domain Reconstruction (Motor-Weighted)
-        freq_loss = self._frequency_loss(recon, target)
-          
-        # 3. Bottleneck Regularization
-        bottleneck_loss = torch.tensor(0., device=target.device)
-        var_loss = torch.tensor(0., device=target.device)
-        decorr_loss = torch.tensor(0., device=target.device)
+        # Frequency-domain losses
+        magnitude_loss = self._magnitude_loss(recon, target)  # Spectral shape
+        power_loss = self._power_loss(recon, target)          # Absolute scale
+        phase_loss = self._phase_loss(recon, target)
         
-        if embeddings is not None:
-            # Flatten: (B, num_chunks, D) -> (B*num_chunks, D)
-            # Or if embeddings are (B, D), just keep as is
-            if embeddings.dim() == 3:
-                embeddings_flat = embeddings.view(-1, embeddings.size(-1))
-            else:
-                embeddings_flat = embeddings
-            
-            var_loss = self._bottleneck_variance_loss(embeddings_flat)
-            decorr_loss = self._bottleneck_decorrelation_loss(embeddings_flat)
-            
-            bottleneck_loss = (
-                self.bottleneck_var_weight * var_loss +
-                self.bottleneck_cov_weight * decorr_loss
-            )
+        # Bottleneck regularization
+        if embeddings is not None and embeddings.dim() == 3:
+            embeddings = embeddings.reshape(-1, embeddings.size(-1))
         
-        # Total Loss
+        bottleneck_loss = self._bottleneck_regularization(embeddings)
+        
+        # Total loss
         total_loss = (
-            self.recon_weight * recon_loss + 
-            self.freq_weight * freq_loss +
-            vq_loss + 
+            self.mse_weight * mse_loss +
+            self.magnitude_weight * magnitude_loss +
+            self.power_weight * power_loss +           # NEW
+            self.phase_weight * phase_loss +
+            vq_loss +
             bottleneck_loss
         )
-
+        
         return {
             'loss': total_loss,
-            'recon_loss': recon_loss,
-            'freq_loss': freq_loss,
+            'mse_loss': mse_loss,
+            'magnitude_loss': magnitude_loss,
+            'power_loss': power_loss,                  # NEW
+            'phase_loss': phase_loss,
             'vq_loss': vq_loss,
-            'bottleneck_loss': bottleneck_loss,
-            'bottleneck_var_loss': var_loss,
-            'bottleneck_cov_loss': decorr_loss
+            'bottleneck_loss': bottleneck_loss
         }
+    
+
+class CustomMSE(TorchLoss):
+    def __init__(self):
+        """MSE Loss with automatic validation"""
+        super().__init__(expected_model_output_keys=['reconstruction', 'target'], 
+                         expected_loss_keys=['loss'])
+        self.name = "CustomMSE"
+        self.function = nn.MSELoss(reduction='mean')
+    def _compute_loss(self, outputs: Dict, inputs: torch.Tensor) -> torch.Tensor:
+        rec = outputs['reconstruction']
+        target = outputs['target']
+        loss = self.function(rec, target)
+        return {'loss': loss}

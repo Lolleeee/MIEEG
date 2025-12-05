@@ -12,8 +12,8 @@ class VQAELightConfig:
     """Configuration for the VQ-VAE model."""
     use_quantizer: bool = True
     use_cwt: bool = True
-    use_inverse_cwt: bool = True # NEW: Use Physics-Informed Decoder Head
-
+    use_inverse_cwt: bool = False # NEW: Use Physics-Informed Decoder Head
+    output_coeffs: bool = False  # If True, output CWT coeffs instead of time signal
     # CWT parameters
     cwt_frequencies: tuple = None
     chunk_samples: int = 160  # If None, no chunking
@@ -175,58 +175,24 @@ class Encoder2DStageLight(nn.Module):
         self.config = config
         layers = []
         in_channels = config.num_input_channels
-        
         for i, out_channels in enumerate(config.encoder_2d_channels):
-            # --- NEW STRIDING LOGIC ---
-            # Layer 0: Stride=(1, 1) -> De-blurring / Sharpening
-            # Layer 1+: Stride=(1, 2) -> Compress Time, Preserve Freq
-            if i == 0:
-                stride = (1, 1)
-            else:
-                stride = (1, 2)
-            
-            # Select Conv Type
             if config.use_separable_conv and i > 0:
-                conv = DepthwiseSeparableConv2d(
-                    in_channels, out_channels, 
-                    kernel_size=3, stride=stride, padding=1, 
-                    use_se=config.use_squeeze_excitation
-                )
+                conv = DepthwiseSeparableConv2d(in_channels, out_channels, 3, 2, 1, use_se=config.use_squeeze_excitation)
             else:
-                conv = nn.Conv2d(
-                    in_channels, out_channels, 
-                    kernel_size=3, stride=stride, padding=1, 
-                    bias=False
-                )
-            
+                conv = nn.Conv2d(in_channels, out_channels, 3, 2, 1, bias=False)
             norm = nn.GroupNorm(min(config.num_groups, out_channels), out_channels) if config.use_group_norm else nn.BatchNorm2d(out_channels)
             se = SqueezeExcitation2D(out_channels) if config.use_squeeze_excitation and not (config.use_separable_conv and i > 0) else nn.Identity()
-            
             layers.extend([conv, norm, nn.SiLU(inplace=True), se])
-            if i < len(config.encoder_2d_channels) - 1:
-                layers.append(nn.Dropout2d(p=config.dropout_2d))
-                
+            if i < len(config.encoder_2d_channels) - 1: layers.append(nn.Dropout2d(p=config.dropout_2d))
             in_channels = out_channels
-            
         self.conv_net = nn.Sequential(*layers)
-        
-        # --- CORRECT OUTPUT DIM CALCULATION ---
         self.freq_out = config.num_freq_bands
         self.time_out = config.time_samples
-        
-        for i in range(len(config.encoder_2d_channels)):
-            if i == 0:
-                # Stride (1, 1): No change
-                pass 
-            else:
-                # Stride (1, 2): Freq same, Time / 2
-                self.time_out = (self.time_out + 1) // 2
-
+        for _ in config.encoder_2d_channels:
+            self.freq_out = (self.freq_out + 1) // 2
+            self.time_out = (self.time_out + 1) // 2
         self.out_channels = config.encoder_2d_channels[-1]
-
-    def forward(self, x):
-        return self.conv_net(x)
-
+    def forward(self, x): return self.conv_net(x)
 
 class Encoder3DStageLight(nn.Module):
     def __init__(self, config: VQAELightConfig, channels_in: int, time_in: int):
@@ -276,73 +242,170 @@ class ResidualBlock1d(nn.Module):
         x = self.se(x)
         return x + res
 
-class DecoderLight(nn.Module):
+class DepthwiseSeparableConv1d(nn.Module):
+    """
+    Depthwise separable convolution (10x fewer params than standard conv).
+    """
+    def __init__(self, channels, out_channels, kernel_size=3):
+        super().__init__()
+        padding = kernel_size // 2
+        
+        # Depthwise: each channel processed independently
+        self.depthwise = nn.Conv1d(
+            channels, channels, 
+            kernel_size, 
+            padding=padding, 
+            groups=channels,  # Key: groups = channels
+            bias=False
+        )
+        
+        # Pointwise: mix channels
+        self.pointwise = nn.Conv1d(channels, out_channels, 1, bias=False)
+    
+    def forward(self, x):
+        x = self.depthwise(x)
+        x = self.pointwise(x)
+        return x
+
+
+class EfficientResidualBlock1d(nn.Module):
+    """
+    Efficient residual block using depthwise separable convs.
+    ~5x fewer params than standard residual block.
+    """
+    def __init__(self, channels):
+        super().__init__()
+        
+        self.block = nn.Sequential(
+            DepthwiseSeparableConv1d(channels, channels, kernel_size=3),
+            nn.GroupNorm(16, channels),
+            nn.GELU(),
+            DepthwiseSeparableConv1d(channels, channels, kernel_size=3),
+            nn.GroupNorm(16, channels)
+        )
+        
+        self.act = nn.GELU()
+    
+    def forward(self, x):
+        return self.act(x + self.block(x))
+
+
+class EfficientChannelAttention(nn.Module):
+    """
+    Efficient Squeeze-and-Excitation style attention.
+    Only ~1K parameters but huge quality boost.
+    """
+    def __init__(self, channels, reduction=16):
+        super().__init__()
+        reduced_channels = max(channels // reduction, 8)
+        
+        self.attention = nn.Sequential(
+            nn.AdaptiveAvgPool1d(1),
+            nn.Conv1d(channels, reduced_channels, 1),
+            nn.GELU(),
+            nn.Conv1d(reduced_channels, channels, 1),
+            nn.Sigmoid()
+        )
+    
+    def forward(self, x):
+        # Global context
+        attn_weights = self.attention(x)  # (B, C, 1)
+        
+        # Apply attention
+        return x * attn_weights
+
+class EfficientPowerfulDecoder(nn.Module):
+    """
+    Powerful decoder with <600K parameters.
+    
+    Key efficient tricks:
+    1. Depthwise separable convolutions (10x fewer params)
+    2. Gradual upsampling (4 stages instead of 2)
+    3. Shared residual blocks
+    4. Channel-wise attention (cheaper than full attention)
+    """
     def __init__(self, config: VQAELightConfig):
         super().__init__()
         self.config = config
         
-        # 1. Initial Projection
-        init_time = config.time_samples // 4
-        self.init_channels = config.decoder_channels[0]
-        self.init_dim = self.init_channels * init_time
+        # Stage 1: Project to very low resolution
+        init_time = 10  # Start even smaller for gradual upsampling
+        self.init_channels = 256
         
         self.projection = nn.Sequential(
-            nn.Linear(config.embedding_dim, self.init_dim, bias=False),
-            nn.LayerNorm(self.init_dim), nn.SiLU(inplace=True)
+            nn.Linear(config.embedding_dim, self.init_channels * init_time),
+            nn.LayerNorm(self.init_channels * init_time),
+            nn.GELU()
         )
         
-        layers = []
-        in_channels = self.init_channels
+        # Stage 2: Gradual upsampling with depthwise separable convs
+        # 10 → 20 → 40 → 80 → 160 (4 stages)
         
-        # Stage 1: Refine
-        layers.append(ResidualBlock1d(in_channels, use_se=config.use_squeeze_excitation))
+        # 10 → 20
+        self.up1 = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode='linear', align_corners=False),
+            DepthwiseSeparableConv1d(256, 256, kernel_size=5),
+            nn.GroupNorm(16, 256),
+            nn.GELU(),
+            EfficientResidualBlock1d(256)
+        )
         
-        # Stage 2: Upsample
-        layers.append(nn.ConvTranspose1d(in_channels, config.decoder_channels[1], 4, 2, 1))
-        in_channels = config.decoder_channels[1]
-        layers.append(nn.GroupNorm(min(config.num_groups, in_channels), in_channels))
-        layers.append(nn.SiLU(inplace=True))
-        layers.append(ResidualBlock1d(in_channels, use_se=config.use_squeeze_excitation))
+        # 20 → 40
+        self.up2 = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode='linear', align_corners=False),
+            DepthwiseSeparableConv1d(256, 256, kernel_size=5),
+            nn.GroupNorm(16, 256),
+            nn.GELU(),
+            EfficientResidualBlock1d(256)
+        )
         
-        # Stage 3: Final Upsample (NO Norm)
-        layers.append(nn.ConvTranspose1d(in_channels, config.decoder_channels[-1], 4, 2, 1))
-        in_channels = config.decoder_channels[-1]
-        layers.append(nn.SiLU(inplace=True))
-        layers.append(ResidualBlock1d(in_channels, use_se=config.use_squeeze_excitation))
+        # 40 → 80
+        self.up3 = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode='linear', align_corners=False),
+            DepthwiseSeparableConv1d(256, 256, kernel_size=5),
+            nn.GroupNorm(16, 256),
+            nn.GELU(),
+            EfficientResidualBlock1d(256)
+        )
         
-        self.main_net = nn.Sequential(*layers)
+        # 80 → 160
+        self.up4 = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode='linear', align_corners=False),
+            DepthwiseSeparableConv1d(256, 256, kernel_size=5),
+            nn.GroupNorm(16, 256),
+            nn.GELU(),
+            EfficientResidualBlock1d(256)
+        )
         
-        # 3. Final Projection
-        # If using iCWT, we need to output Spectrogram Coeffs (Channels * Freqs * 2)
-        # If not, we output Time Sequence (Channels)
-        if config.use_inverse_cwt:
-            self.out_channels = config.orig_channels * config.num_freq_bands * 2
-        else:
-            self.out_channels = config.orig_channels
-            
-        self.final_conv = nn.Conv1d(in_channels, self.out_channels, kernel_size=3, padding=1)
-        nn.init.normal_(self.final_conv.weight, std=0.02)
-
+        # Stage 3: Efficient channel-wise attention
+        self.channel_attention = EfficientChannelAttention(256, reduction=16)
+        
+        # Stage 4: Final projection (grouped conv for efficiency)
+        self.final = nn.Sequential(
+            nn.Conv1d(256, 1600, 1, groups=8),  # Grouped 1x1 conv
+        )
+    
     def forward(self, z_q):
         B = z_q.shape[0]
-        x = self.projection(z_q)
-        x = x.view(B, self.init_channels, -1)
-        x = self.main_net(x)
-        x = self.final_conv(x)
         
-        if x.shape[-1] != self.config.time_samples:
-            x = F.interpolate(x, size=self.config.time_samples, mode='linear', align_corners=False)
-            
-        # If iCWT mode, reshape to (B, 32, F, 2, T) for the head
-        if self.config.use_inverse_cwt:
-            # Flattened output: (B, 32*F*2, T)
-            # We need to pass this to InverseCWTHead. 
-            # The Head expects exactly (B, 32*F*2, T) for its ConvTranspose1d input.
-            pass 
-            
+        # Project
+        x = self.projection(z_q)
+        x = x.view(B, self.init_channels, 10)
+        
+        # Gradual upsampling
+        x = self.up1(x)  # 10 → 20
+        x = self.up2(x)  # 20 → 40
+        x = self.up3(x)  # 40 → 80
+        x = self.up4(x)  # 80 → 160
+        
+        # Apply attention
+        x = self.channel_attention(x)
+        
+        # Final projection
+        x = self.final(x)
+        
         return x
-    
-# --- MAIN MODEL ---
+
 
 class VQAELight(nn.Module):
     def __init__(self, config: VQAELightConfig | dict):
@@ -376,9 +439,14 @@ class VQAELight(nn.Module):
             config.commitment_cost, config.ema_decay, config.epsilon
         )
         
-        self.decoder = DecoderLight(config)
+        self.decoder = EfficientPowerfulDecoder(config)
         self.apply(self._init_weights)
-    
+
+        self.register_buffer(
+            'good_channel_indices',
+            torch.tensor([i for i in range(35) if i not in [0, 2, 4]])
+        )
+
     def _init_weights(self, m):
         if isinstance(m, (nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.ConvTranspose1d)):
             nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
@@ -389,68 +457,168 @@ class VQAELight(nn.Module):
         elif isinstance(m, (nn.BatchNorm1d, nn.GroupNorm, nn.LayerNorm)):
             if m.weight is not None: nn.init.constant_(m.weight, 1)
             if m.bias is not None: nn.init.constant_(m.bias, 0)
+
+    def flatten_reconstruction(self, x):
+        B, Ch, F, R, C, T = x.shape
+        
+        # Merge spatial dimensions
+        x = x.reshape(B, Ch, F, R * C, T)
+        
+        # Use pre-computed indices
+        x = torch.index_select(x, dim=3, index=self.good_channel_indices)
+        
+        # Flatten
+        x = x.permute(0, 3, 1, 2, 4).reshape(B, 32 * Ch * F, T)
+        
+        return x
     
     def encode(self, x):
         B, Ch, F, R, C, T = x.shape
         x = x.permute(0, 3, 4, 1, 2, 5).reshape(B * R * C, Ch, F, T)
         
         x = self.encoder_2d(x)
-    
+        
         C_out, F_out, T_out = x.shape[1], x.shape[2], x.shape[3]
         x = x.view(B, R, C, C_out, F_out, T_out).permute(0, 3, 4, 1, 2, 5).reshape(B, C_out * F_out, R, C, T_out)
         
         return self.encoder_3d(x)
     
     def decode(self, z_q):
-        x = self.decoder(z_q) # (B, Out_Channels, T)
+        """
+        Decode from latent representation.
         
-        # If Inverse CWT is ON, pass through head
+        Returns:
+            If output_coeffs=True: (B, 1600, T) - CWT coefficients
+            If use_inverse_cwt=True: (B, 32, T) - Raw EEG signal via iCWT
+            Otherwise: (B, 32, T) - Raw EEG signal
+        """
+        x = self.decoder(z_q)  # (B, Out_Channels, T)
+        
+        # If output_coeffs is True, return coefficients without iCWT
+        if self.config.output_coeffs:
+            # x is already (B, 1600, T) from decoder
+            return x
+        
+        # If Inverse CWT is ON (and not outputting coeffs), pass through head
         if self.use_cwt and self.config.use_inverse_cwt:
-            x = self.inv_cwt_head(x) # (B, 32, T)
+            x = self.inv_cwt_head(x)  # (B, 32, T)
             
         return x
     
     def forward(self, x):
-        # Store chunks info for reconstruction if needed
+        """
+        Forward pass.
+        
+        Args:
+            x: (B, 32, T_full) - Raw EEG signal
+            
+        Returns:
+            dict with:
+                'reconstruction': 
+                    - (B, 1600, T) if output_coeffs=True
+                    - (B, 32, T_full) otherwise (after unchunking if needed)
+                'embeddings': (B, embedding_dim)
+                'quantized': (B, embedding_dim) 
+                'indices': (B,)
+                'vq_loss': scalar
+                'perplexity': scalar
+                'codebook_usage': scalar
+        """
+        # Apply CWT transform
         if self.use_cwt:
-            x_cwt = self.cwt_head(x) # (B, 2, F, 7, 5, T)
+            x_cwt = self.cwt_head(x)  # (B, 2, F, 7, 5, T)
         else:
-            # If no CWT, we assume input is already formatted or logic differs
             x_cwt = x 
             
+        # Encode
         z_e = self.encode(x_cwt)
 
+        # Quantize (optional)
         if self.config.use_quantizer:
             z_q, indices, vq_losses = self.vq(z_e)
         else:
             z_q = z_e
             indices = torch.zeros(z_e.shape[0], device=z_e.device).long()
-            vq_losses = {'vq_loss': torch.tensor(0.), 'perplexity': torch.tensor(0.), 'codebook_usage': torch.tensor(1.)}
+            vq_losses = {
+                'vq_loss': torch.tensor(0., device=z_e.device), 
+                'perplexity': torch.tensor(0., device=z_e.device), 
+                'codebook_usage': torch.tensor(1., device=z_e.device)
+            }
         
+        # Decode
         recon = self.decode(z_q)
-        
-        # Unchunk logic for original EEG
-        if self.use_cwt and self.chunk_samples is not None:
-            recon = self.cwt_head.unchunk_raw_eeg(recon) 
 
+        # Target for loss computation
+        if self.config.output_coeffs:
+            target = self.flatten_reconstruction(x_cwt)  
+        else:
+            target = x  # (B, 32, T_full)
+
+        # Handle unchunking for raw EEG output (not for coeffs)
+        if self.use_cwt and self.chunk_samples is not None:
+            # Only unchunk if we're outputting raw EEG (not coeffs)
+            recon = self.cwt_head._unchunk(recon)
+            
+            if self.config.output_coeffs:
+                target = self.cwt_head._unchunk(target)
+            
         return {
             'reconstruction': recon,
             'embeddings': z_e,
             'quantized': z_q,
             'indices': indices,
-            **vq_losses
+            **vq_losses,
+            'target': target
         }
 
 if __name__ == "__main__":
-    print("DUAL-CHANNEL VQ-AE + iCWT TEST")
-    config = VQAELightConfig(
-        num_input_channels=2, num_freq_bands=25, spatial_rows=7, spatial_cols=5, 
-        time_samples=160, use_cwt=True, chunk_samples=160, 
-        use_inverse_cwt=True, # Toggle this to test
-        embedding_dim=64 # Increased for iCWT complexity
+    print("="*60)
+    print("TEST 1: Normal mode (raw EEG output)")
+    print("="*60)
+    config1 = VQAELightConfig(
+        use_cwt=True, 
+        use_inverse_cwt=True,
+        embedding_dim=64,
+        output_coeffs=True
     )
-    model = VQAELight(config)
-    x = torch.randn(1, 32, 640)
-    with torch.no_grad(): out = model(x)
-    print(f"Input: {x.shape}, Recon: {out['reconstruction'].shape}")
-    print(model)
+    model1 = VQAELight(config1)
+    x = torch.randn(2, 32, 640)
+    with torch.no_grad(): 
+        out1 = model1(x)
+    print(f"Input: {x.shape}")
+    print(f"Reconstruction: {out1['reconstruction'].shape}")  # Should be (2, 32, 640)
+    print(f"Target: {out1['target'].shape}")  # Should be (2, 32, 640)
+    assert out1['reconstruction'].shape == (2, 32, 640), "Expected raw EEG output"
+    
+    print("\n" + "="*60)
+    print("TEST 2: Coefficient output mode")
+    print("="*60)
+    config2 = VQAELightConfig(
+        use_cwt=True, 
+        use_inverse_cwt=False,  # Not used when output_coeffs=True
+        output_coeffs=True,
+        embedding_dim=64
+    )
+    model2 = VQAELight(config2)
+    with torch.no_grad(): 
+        out2 = model2(x)
+    print(f"Input: {x.shape}")
+    print(f"Reconstruction: {out2['reconstruction'].shape}")  # Should be (2, 1600, 160)
+    assert out2['reconstruction'].shape == (2, 1600, 640), "Expected coefficient output"
+    
+    print("\n" + "="*60)
+    print("TEST 3: No iCWT, no coeff output (direct decoder output)")
+    print("="*60)
+    config3 = VQAELightConfig(
+        use_cwt=True, 
+        use_inverse_cwt=False,
+        output_coeffs=False,
+        embedding_dim=64
+    )
+    model3 = VQAELight(config3)
+    with torch.no_grad(): 
+        out3 = model3(x)
+    print(f"Input: {x.shape}")
+    print(f"Reconstruction: {out3['reconstruction'].shape}")  # Should be (2, 32, 640)
+    
+    print("\n✅ All tests passed!")

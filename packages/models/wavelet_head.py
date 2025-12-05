@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import numpy as np
-
+from torch.nn import functional as F    
 class CWTHead(nn.Module):
     def __init__(
         self, 
@@ -152,28 +152,26 @@ class CWTHead(nn.Module):
                     
         return weights
 
-    def unchunk_raw_eeg(self, x):
+    def _unchunk(self, x):
         """Going from (Batch*NChunks, Channels, ChunkSize) to (Batch, Channels, TotalTime)"""
         Bn, C, chunk_T = x.shape
         if self.chunk_size_samples is None:
             return x
         x = x.view(-1, C, self.num_chunks*chunk_T)
         return x
-
+    
 class InverseCWTHead(nn.Module):
     def __init__(self, encoder_head):
         super().__init__()
         self.frequencies = encoder_head.frequencies
         self.num_channels = encoder_head.num_channels
         self.num_freqs = encoder_head.num_freqs
-        
-        # Check if encoder uses log compression
         self.use_log_compression = getattr(encoder_head, 'use_log_compression', False)
         
-        # In_Channels: (32 * F * 2) -> Out_Channels: 32
         in_ch = encoder_head.conv.out_channels
         out_ch = encoder_head.num_channels
         
+        # Standard Inverse Conv
         self.inv_conv = nn.ConvTranspose1d(
             in_channels=in_ch, out_channels=out_ch,
             kernel_size=encoder_head.conv.kernel_size,
@@ -187,33 +185,31 @@ class InverseCWTHead(nn.Module):
         self.scale = nn.Parameter(torch.ones(1, out_ch, 1))
 
     def forward(self, x):
-        # x: (B, 32*F*2, T) -> Flat output from Decoder
+        # x: (B, 32*F*2, T)
         B, C_total, T = x.shape
         
-        # 1. Reshape to [Batch, Channel, Freq, 2 (Mag/Phase), Time]
-        # This assumes Decoder learned to output [Mag, Phase] pairs in order
+        # 1. Reshape [B, 32, F, 2, T]
         x_reshaped = x.view(B, self.num_channels, self.num_freqs, 2, T)
         
-        mag = x_reshaped[..., 0, :]
+        mag_raw = x_reshaped[..., 0, :]
         phase = x_reshaped[..., 1, :]
         
-        # 2. Invert Log Compression (Linearize Magnitude)
+        # 2. FIX: Enforce Positive Magnitude before inversion
+        # If the decoder outputs -5.0, expm1(-5) is -0.99 (Invalid Magnitude)
+        # Softplus ensures we are always in the positive domain before expm1
         if self.use_log_compression:
-            mag = torch.expm1(mag) # exp(x) - 1
-            
-        # 3. Convert Polar -> Rectangular (Real, Imag)
-        # We need Real/Imag because inv_conv weights are Morlet (Real/Imag)
+             # Softplus makes negative logits small positive numbers, preserving gradient
+            mag_positive = F.softplus(mag_raw)
+            mag = torch.expm1(mag_positive)
+        else:
+            mag = F.softplus(mag_raw) # Simple positivity constraint
+
+        # 3. Polar -> Rectangular
         real = mag * torch.cos(phase)
         imag = mag * torch.sin(phase)
         
-        # 4. Re-Stack to [Batch, 32*F*2, Time]
-        # Interleave Real/Imag: [R, I, R, I...]
+        # 4. Interleave for Morlet Weight compatibility
         rect_features = torch.stack([real, imag], dim=3)
         rect_flat = rect_features.view(B, C_total, T)
         
-        # 5. Inverse CWT
-        out = self.inv_conv(rect_flat)
-        
-        return out * self.scale
-
-
+        return self.inv_conv(rect_flat) * self.scale
