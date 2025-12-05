@@ -8,7 +8,7 @@ from packages.train.metrics import TorchMetric, RMSE, MSE, MAE, AxisCorrelation
 from packages.train.loss import TorchLoss, TorchMSELoss, TorchL1Loss, SequenceVQVAELoss, VQAE23Loss
 from packages.models.vqae_skip import SequenceVQAE as SequenceVQAE_Skip
 from packages.models.vqae import VQVAE
-from packages.models.vqae_23 import VQAE as VQAE23
+from packages.models.vqae_light_ts import VQAELight as VQAE23_LTS
 from packages.models.vqae_light import VQAELight
 from packages.models.test_models import SimpleVQVAE, SimpleAutoencoder
 from packages.data_objects.dataset import TorchDataset, TestTorchDataset, TorchH5Dataset
@@ -29,7 +29,7 @@ class ModelType(str, Enum):
     #Test models
     SIMPLE_VQVAE = "simple_vqvae"
     SIMPLE_AE = "simple_ae"
-    VQAE23 = "vqae23"
+    VQAE23_LTS = "vqae23_lts"
     COMVQAE23 = "com_vqae23"
 
 class OptimizerType(str, Enum):
@@ -76,7 +76,7 @@ MODEL_MAP = {
     ModelType.SEQUENCE_VQAE_SKIP: SequenceVQAE_Skip,
     ModelType.SIMPLE_VQVAE: SimpleVQVAE,
     ModelType.COMVQAE23: VQAELight,
-    ModelType.VQAE23: VQAE23,
+    ModelType.VQAE23_LTS: VQAE23_LTS,
 }
 
 OPTIMIZER_MAP = {

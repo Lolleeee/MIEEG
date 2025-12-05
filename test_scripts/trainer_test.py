@@ -12,7 +12,7 @@ from packages.train.trainer_config_schema import (
     CustomPlotTypes
 )
 from packages.train.training import Trainer
-from packages.models.vqae_light import VQAELight, VQAELightConfig
+from packages.models.vqae_light_ts import VQAELight, VQAELightConfig
 from packages.data_objects.dataset import autoencoder_unpack_func
 model_config = VQAELightConfig(
     use_quantizer=False,
@@ -24,7 +24,7 @@ model_config = VQAELightConfig(
 
 config = {
     'model': {
-        'model_type': ModelType.COMVQAE23,
+        'model_type': ModelType.VQAE23_LTS,
         'model_kwargs': {
             'config': model_config
         }

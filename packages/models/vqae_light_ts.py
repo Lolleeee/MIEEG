@@ -525,15 +525,12 @@ class VQAELight(nn.Module):
         else:
             recon = recon_chunk
 
-        target = x
-
         return {
             'reconstruction': recon,
             'embeddings': z_e,
             'quantized': z_q,
             'indices': indices,
-            **vq_losses,
-            'target': target
+            **vq_losses
         }
 
 if __name__ == "__main__":
@@ -547,6 +544,5 @@ if __name__ == "__main__":
         out = model(x)
     print("Input:", x.shape)
     print("Reconstruction:", out['reconstruction'].shape)
-    print("Target:", out['target'].shape)
     assert out['reconstruction'].shape == (2, 32, 640)
     print("✅ OK")
