@@ -352,6 +352,90 @@ class EfficientChannelAttention(nn.Module):
         attn_weights = self.attention(x)  # (B, C, 1)
         return x * attn_weights
 
+
+class HybridMultiScaleDecoder(nn.Module):
+    """
+    Main decoder + dedicated high-frequency residual path.
+    """
+    def __init__(self, config: VQAELightConfig):
+        super().__init__()
+        self.config = config
+        hidden_dim = max(512, config.embedding_dim // 2)
+        
+        self.projection = nn.Sequential(
+            nn.Linear(config.embedding_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU()
+        )
+        
+        # ===== MAIN DECODER (Full bandwidth) =====
+        self.main_decoder = nn.Sequential(
+            nn.Linear(hidden_dim, 256 * 40),
+            nn.Unflatten(1, (256, 40)),
+            
+            nn.ConvTranspose1d(256, 128, kernel_size=8, stride=2, padding=3),
+            nn.GroupNorm(16, 128),
+            nn.GELU(),
+            DepthwiseSeparableConv1d(128, 128, kernel_size=5),
+            nn.GroupNorm(16, 128),
+            nn.GELU(),
+            
+            nn.ConvTranspose1d(128, 64, kernel_size=8, stride=2, padding=3),
+            nn.GroupNorm(8, 64),
+            nn.GELU(),
+            EfficientResidualBlock1d(64),
+            nn.Conv1d(64, config.orig_channels, 1)
+        )
+        
+        # ===== HIGH-FREQ RESIDUAL PATH =====
+        self.highfreq_residual = nn.Sequential(
+            nn.Linear(hidden_dim, 128 * 40),
+            nn.Unflatten(1, (128, 40)),
+            
+            # Sharp upsampling for high-freq
+            nn.ConvTranspose1d(128, 64, kernel_size=4, stride=4, padding=0),
+            nn.GroupNorm(8, 64),
+            nn.GELU(),
+            
+            # Small kernels to preserve sharpness
+            DepthwiseSeparableConv1d(64, 32, kernel_size=3),
+            nn.GroupNorm(8, 32),
+            nn.GELU(),
+            nn.Conv1d(32, config.orig_channels, 1)
+        )
+        
+        # Learnable mixing weight
+        self.alpha = nn.Parameter(torch.tensor(0.3))
+    
+    def forward(self, z_q):
+        shared = self.projection(z_q)
+        
+        # Main reconstruction
+        main = self.main_decoder(shared)  # (B, 32, 160)
+        
+        # High-freq residual
+        residual = self.highfreq_residual(shared)  # (B, 32, 160)
+        
+        # Highpass filter residual (keep only high freqs)
+        residual_filtered = self._highpass_filter(residual, cutoff_hz=30)
+        
+        # Combine
+        combined = main + self.alpha * residual_filtered
+        
+        return combined
+    
+    def _highpass_filter(self, x, cutoff_hz, fs=160):
+        """Apply soft highpass filter in frequency domain."""
+        X = torch.fft.rfft(x, dim=-1)
+        freqs = torch.fft.rfftfreq(x.shape[-1], 1/fs).to(x.device)
+        
+        # Smooth transition (sigmoid) instead of hard cutoff
+        mask = torch.sigmoid((freqs - cutoff_hz) * 0.5)
+        X_filtered = X * mask[None, None, :]
+        
+        return torch.fft.irfft(X_filtered, n=x.shape[-1], dim=-1)
+
+
 class MultiScaleDecoder(nn.Module):
     """
     Multi-scale decoder that reconstructs low and high frequencies separately.
@@ -453,7 +537,7 @@ class VQAELight(nn.Module):
             config.epsilon
         )
         
-        self.decoder = MultiScaleDecoder(config)
+        self.decoder = HybridMultiScaleDecoder(config)
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
