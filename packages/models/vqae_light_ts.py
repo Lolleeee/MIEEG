@@ -14,7 +14,9 @@ class VQAELightConfig:
     # CWT parameters
     cwt_frequencies: tuple = None
     chunk_samples: int = 160  # if None, no chunking
-
+    use_log_compression = True
+    normalize_outputs = True
+    learnable_norm = True
     # Data shape parameters
     num_input_channels: int = 2   # power + phase
     num_freq_bands: int = 25
@@ -40,7 +42,7 @@ class VQAELightConfig:
     # Dropout
     dropout_2d: float = 0.05
     dropout_3d: float = 0.05
-    dropout_bottleneck: float = 0.1
+    dropout_bottleneck: float = 0.
     dropout_decoder: float = 0.05
     
     # Architecture
@@ -431,7 +433,10 @@ class VQAELight(nn.Module):
                 num_channels=config.orig_channels,
                 n_cycles=5.0,
                 trainable=False,
-                chunk_samples=config.chunk_samples
+                chunk_samples=config.chunk_samples,
+                use_log_compression=config.use_log_compression,
+                normalize_outputs=config.normalize_outputs,
+                learnable_norm=config.learnable_norm
             )
         
         self.encoder_2d = Encoder2DStageLight(config)

@@ -31,15 +31,6 @@ def main():
 
     loader = FileDataset(
         root_folder=base_folder, yield_identifiers=True, unpack_func=unpack)
-    
-    frequencies = np.concatenate([
-    np.linspace(1, 4, 3),       # Delta: 3 bins (keep all)
-    np.linspace(4, 8, 5)[1:],   # Theta: 4 bins (skip first)
-    np.linspace(8, 13, 8)[1:],  # Alpha: 7 bins (skip first)  
-    np.linspace(13, 30, 10)[1:],# Beta: 9 bins (skip first)
-    np.linspace(30, 80, 8)[1:]  # Gamma: 7 bins (skip first)
-])
-    frequencies = tuple(frequencies.tolist())
 
     from scipy.signal import butter, sosfiltfilt, iirnotch, filtfilt
     sos = butter(4, [0.4, 79.9], btype='bandpass', fs=160, output='sos')
@@ -47,8 +38,6 @@ def main():
     f0 = 60.0  # Frequency to remove
     Q = 30.0  # Quality factor
     b, a = iirnotch(f0, Q, fs)
-
-# Apply filter
 
     for patient, trial, eeg_data in tqdm.tqdm(loader):
         
