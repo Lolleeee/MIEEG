@@ -11,7 +11,7 @@ from packages.models.vqae import VQVAE
 from packages.models.vqae_light_ts import VQAELight as VQAE23_LTS
 from packages.models.vqae_light import VQAELight
 from packages.models.test_models import SimpleVQVAE, SimpleAutoencoder
-from packages.data_objects.dataset import TorchDataset, TestTorchDataset, TorchH5Dataset
+from packages.data_objects.dataset import TestTorchH5Dataset, TestTorchH5DatasetContiguous, TorchDataset, TestTorchDataset, TorchH5Dataset
 from enum import Enum
 import json
 from pprint import pprint
@@ -54,6 +54,8 @@ class DatasetType(str, Enum):
     TORCH_DATASET = "torch_dataset"
     TEST_TORCH_DATASET = "test_torch_dataset"
     H5_DATASET = "h5_dataset"
+    TEST_H5_DATASET = "test_h5_dataset"
+    TEST_H5_DATASETCONT = "test_h5_dataset_contiguous"
 
 
 class MetricType(str, Enum):
@@ -95,6 +97,8 @@ DATASET_MAP = {
     DatasetType.TORCH_DATASET: TorchDataset,
     DatasetType.TEST_TORCH_DATASET: TestTorchDataset,
     DatasetType.H5_DATASET: TorchH5Dataset,
+    DatasetType.TEST_H5_DATASET: TestTorchH5Dataset,
+    DatasetType.TEST_H5_DATASETCONT: TestTorchH5DatasetContiguous,
 }
 
 METRIC_MAP = {

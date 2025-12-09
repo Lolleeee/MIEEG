@@ -366,6 +366,117 @@ class TorchH5Dataset(Dataset):
         if hasattr(self, 'h5_file') and self.h5_file:
             self.h5_file.close()
 
+
+
+class TestTorchH5Dataset(TorchH5Dataset):
+    """
+    Test/Debug version of TorchH5Dataset that supports sampling a subset.
+    
+    Useful for:
+    - Quick prototyping with small data subsets
+    - Debugging without processing entire dataset
+    - Sanity checks on model/training pipeline
+    
+    Args:
+        h5_path: Path to HDF5 file
+        nsamples: Number of samples to use (None = all, int = random subset)
+        augmentation_func: Optional augmentation function
+        unpack_func: Optional unpack function
+        seed: Random seed for reproducible sampling
+    """
+    __test__ = False  # Prevent PyTest from treating this as a test class
+    
+    def __init__(
+        self,
+        h5_path: str,
+        nsamples: int = None,
+        augmentation_func: Callable = None,
+        unpack_func: Callable = None,
+        seed: int = 42
+    ):
+        # Initialize parent class
+        super().__init__(h5_path, augmentation_func, unpack_func)
+        
+        # Store full dataset length
+        self.full_length = self.length
+        
+        # Determine subset indices
+        if nsamples is not None:
+            if nsamples > self.full_length:
+                logging.warning(
+                    f"Requested {nsamples} samples but dataset only has {self.full_length}. "
+                    f"Using all samples."
+                )
+                nsamples = self.full_length
+            
+            # Create random subset indices
+            torch.manual_seed(seed)
+            self.subset_indices = torch.randperm(self.full_length)[:nsamples].tolist()
+            self.length = len(self.subset_indices)
+            
+            logging.info(
+                f"TestTorchH5Dataset: Using {self.length}/{self.full_length} samples from {h5_path}"
+            )
+        else:
+            # Use all samples
+            self.subset_indices = None
+            logging.info(f"TestTorchH5Dataset: Using all {self.length} samples from {h5_path}")
+    
+    def __len__(self):
+        return self.length
+    
+    def __getitem__(self, idx):
+        # Map subset index to full dataset index
+        if self.subset_indices is not None:
+            if idx >= len(self.subset_indices):
+                raise IndexError(f"Index {idx} out of range for subset of size {len(self.subset_indices)}")
+            actual_idx = self.subset_indices[idx]
+        else:
+            actual_idx = idx
+        
+        # Use parent class logic with mapped index
+        return super().__getitem__(actual_idx)
+
+
+class TestTorchH5DatasetContiguous(TorchH5Dataset):
+    """
+    Alternative version that takes the FIRST N samples instead of random sampling.
+    Useful when you want consistent, reproducible subsets without randomness.
+    
+    Args:
+        h5_path: Path to HDF5 file
+        nsamples: Number of samples to use from the beginning (None = all)
+        augmentation_func: Optional augmentation function
+        unpack_func: Optional unpack function
+    """
+    __test__ = False
+    
+    def __init__(
+        self,
+        h5_path: str,
+        nsamples: int = None,
+        augmentation_func: Callable = None,
+        unpack_func: Callable = None
+    ):
+        super().__init__(h5_path, augmentation_func, unpack_func)
+        
+        self.full_length = self.length
+        
+        if nsamples is not None:
+            self.length = min(nsamples, self.full_length)
+            logging.info(
+                f"TestTorchH5DatasetContiguous: Using first {self.length}/{self.full_length} samples"
+            )
+        else:
+            logging.info(f"TestTorchH5DatasetContiguous: Using all {self.length} samples")
+    
+    def __getitem__(self, idx):
+        if idx >= self.length:
+            raise IndexError(f"Index {idx} out of range for subset of size {self.length}")
+        return super().__getitem__(idx)
+    
+
+    
 # ============================================================================
 # HELPER CLASSES
 # ============================================================================
