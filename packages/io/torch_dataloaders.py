@@ -324,37 +324,97 @@ def get_data_loaders(
     pin_memory: bool = True,
     max_norm_samples: int = 5000, 
     min_norm_batches: int = 10,
-    norm_convergence_threshold: float = 1e-3
-    
+    norm_convergence_threshold: float = 1e-3,
+    nsamples: int = None  # NEW: Limit total samples used (None = use all)
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
     Creates optimized DataLoaders for Training, Validation, and Testing.
     Handles HDF5 lazy loading, normalization, and split argumentation safely.
+    
+    Args:
+        dataset: TorchDataset or TorchH5Dataset instance
+        batch_size: Batch size for dataloaders
+        sets_size: Dict with 'train', 'val', 'test' split ratios
+        num_workers: Number of workers for data loading
+        norm_axes: Axes to normalize 'input' across
+        target_norm_axes: Axes to normalize 'target' across
+        norm_params: Pre-computed (mean, std) for input
+        target_norm_params: Pre-computed (mean, std) for target
+        augmentation_func: Augmentation function (applied to train only)
+        persistent_workers: Keep workers alive between epochs
+        prefetch_factor: Number of batches to prefetch per worker
+        pin_memory: Pin memory for faster GPU transfer
+        max_norm_samples: Max samples for norm calculation (from full dataset)
+        min_norm_batches: Min batches before checking convergence
+        norm_convergence_threshold: Convergence threshold for early stopping
+        nsamples: Total number of samples to use for train/val/test splits.
+                  If None, use entire dataset. Normalization is still calculated
+                  on full dataset (or max_norm_samples from full dataset).
+    
+    Returns:
+        (train_loader, val_loader, test_loader)
     """
     
-    # 1. SPLIT INDICES
-    indices = np.arange(len(dataset))
+    # 1. SPLIT INDICES - Use full dataset first
+    full_length = len(dataset)
+    all_indices = np.arange(full_length)
     np.random.seed(RANDOM_SEED)
-    np.random.shuffle(indices)
+    np.random.shuffle(all_indices)
     
-    train_idx, val_idx, test_idx = _get_set_sizes(sets_size, len(dataset), indices)
+    # Determine working indices (subset if nsamples specified)
+    if nsamples is not None:
+        if nsamples > full_length:
+            logging.warning(
+                f"Requested {nsamples} samples but dataset has {full_length}. "
+                f"Using all {full_length} samples."
+            )
+            working_indices = all_indices
+            working_length = full_length
+        else:
+            working_indices = all_indices[:nsamples]
+            working_length = nsamples
+            logging.info(
+                f"Using subset of {working_length}/{full_length} samples for train/val/test splits"
+            )
+    else:
+        working_indices = all_indices
+        working_length = full_length
+    
+    # Split the working indices
+    train_idx, val_idx, test_idx = _get_set_sizes(sets_size, working_length, working_indices)
+    
+    logging.info(
+        f"Split sizes - Train: {len(train_idx)}, Val: {len(val_idx)}, Test: {len(test_idx)}"
+    )
     
     # 2. CALCULATE NORMALIZATION (If needed)
-    # We do this BEFORE creating subsets to inject params into the base dataset
+    # IMPORTANT: Use FULL dataset for normalization, not the subset
     should_calc_input = (norm_axes is not None) and (norm_params is None)
     should_calc_target = (target_norm_axes is not None) and (target_norm_params is None)
     
     if should_calc_input or should_calc_target:
-        logging.info("Calculating normalization parameters...")
+        logging.info("Calculating normalization parameters from full dataset...")
         
-        # Create a temporary subset for calculation (using only training data)
-        norm_subset = Subset(dataset, train_idx[:max_norm_samples] if max_norm_samples else train_idx)
+        # Use full training indices for norm calculation (not limited by nsamples)
+        full_train_size = int(sets_size["train"] * full_length)
+        full_train_indices = all_indices[:full_train_size]
+        
+        # Limit to max_norm_samples if specified
+        norm_indices = full_train_indices[:max_norm_samples] if max_norm_samples else full_train_indices
+        
+        logging.info(
+            f"Computing normalization from {len(norm_indices)}/{full_length} samples "
+            f"(full train set has {len(full_train_indices)} samples)"
+        )
+        
+        # Create a temporary subset for calculation
+        norm_subset = Subset(dataset, norm_indices)
         
         # Use a transient DataLoader (kill workers immediately after use)
         norm_loader = DataLoader(
             norm_subset, 
             batch_size=batch_size * 2, 
-            num_workers=min(num_workers, 2), # Don't need many workers for this
+            num_workers=min(num_workers, 2),  # Don't need many workers for this
             persistent_workers=False
         )
         
@@ -376,13 +436,13 @@ def get_data_loaders(
             
         if should_calc_input:
             base_ds._norm_params = input_stats
-            logging.info(f"Input Normalization Set: {input_stats[0].shape}")
+            logging.info(f"Input Normalization Set: mean shape {input_stats[0].shape}")
             
         if should_calc_target and target_stats:
             base_ds._target_norm_params = target_stats
-            logging.info("Target Normalization Set")
+            logging.info(f"Target Normalization Set: mean shape {target_stats[0].shape}")
 
-    # 3. CREATE SUBSETS
+    # 3. CREATE SUBSETS (using working indices, which may be limited by nsamples)
     train_dataset = Subset(dataset, train_idx)
     val_dataset = Subset(dataset, val_idx)
     test_dataset = Subset(dataset, test_idx)
@@ -406,6 +466,11 @@ def get_data_loaders(
     train_loader = DataLoader(train_dataset, shuffle=True, **loader_kwargs)
     val_loader = DataLoader(val_dataset, shuffle=False, **loader_kwargs)
     test_loader = DataLoader(test_dataset, shuffle=False, **loader_kwargs)
+    
+    logging.info(
+        f"DataLoaders created - Batches: Train={len(train_loader)}, "
+        f"Val={len(val_loader)}, Test={len(test_loader)}"
+    )
     
     return train_loader, val_loader, test_loader
 

@@ -205,7 +205,8 @@ class Trainer():
             augmentation_func=self.config.dataset.data_loader.get_augmentation_class,
             max_norm_samples=self.config.dataset.data_loader.max_norm_samples,
             norm_convergence_threshold=self.config.dataset.data_loader.norm_convergence_threshold,
-            min_norm_batches=self.config.dataset.data_loader.min_norm_batches
+            min_norm_batches=self.config.dataset.data_loader.min_norm_batches,
+            nsamples=self.config.dataset.data_loader.nsamples
         )
 
     def _components_runtime_validation_setup(self):
@@ -246,9 +247,6 @@ class Trainer():
         self.metrics_handler = MetricsHandler(self.loss_criterion, self.metrics)
 
         self.helper_handler = HelperHandler(self)
-
-        
-
 
     def start(self):
 

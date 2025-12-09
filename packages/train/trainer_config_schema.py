@@ -136,6 +136,8 @@ class DataLoaderConfig(BaseModel):
     max_norm_samples: Optional[int] = Field(default=None, description="Maximum number of samples to use for normalization calculation")
     norm_convergence_threshold: float = Field(default=1e-4, description="Convergence threshold for normalization calculation")
     min_norm_batches: int = Field(default=10, description="Minimum number of batches to process before checking convergence")
+    nsamples : Optional[int] = Field(default=None, description="If set, limits the dataset to this number of samples (for quick testing)")
+
     @property
     def get_augmentation_class(self):
         """Returns the actual augmentation class"""
