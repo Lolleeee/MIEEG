@@ -352,11 +352,10 @@ class EfficientChannelAttention(nn.Module):
         attn_weights = self.attention(x)  # (B, C, 1)
         return x * attn_weights
 
-
 class AdvancedHybridDecoder(nn.Module):
     """
-    Combines high-frequency preservation + magnitude correction.
-    Compatible with VQAE23Loss - returns dict with auxiliary outputs.
+    Three-path decoder: Main (phase) + High-freq (details) + Magnitude (envelope).
+    Prevents magnitude-phase conflict by separating reconstruction paths.
     """
     def __init__(self, config: VQAELightConfig):
         super().__init__()
@@ -369,7 +368,7 @@ class AdvancedHybridDecoder(nn.Module):
             nn.GELU()
         )
         
-        # ===== MAIN DECODER (Full bandwidth) =====
+        # ===== PATH 1: MAIN DECODER (Phase/Timing) =====
         self.main_decoder = nn.Sequential(
             nn.Linear(hidden_dim, 256 * 40),
             nn.Unflatten(1, (256, 40)),
@@ -388,22 +387,24 @@ class AdvancedHybridDecoder(nn.Module):
             nn.Conv1d(64, config.orig_channels, 1)
         )
         
-        # ===== HIGH-FREQ RESIDUAL PATH =====
+        # ===== PATH 2: HIGH-FREQ RESIDUAL (Sharp Details) =====
         self.highfreq_residual = nn.Sequential(
             nn.Linear(hidden_dim, 128 * 40),
             nn.Unflatten(1, (128, 40)),
             
+            # Sharp upsampling for high-freq
             nn.ConvTranspose1d(128, 64, kernel_size=4, stride=4, padding=0),
             nn.GroupNorm(8, 64),
             nn.GELU(),
             
+            # Small kernels to preserve sharpness
             DepthwiseSeparableConv1d(64, 32, kernel_size=3),
             nn.GroupNorm(8, 32),
             nn.GELU(),
             nn.Conv1d(32, config.orig_channels, 1)
         )
         
-        # ===== MAGNITUDE ENVELOPE CORRECTION =====
+        # ===== PATH 3: MAGNITUDE ENVELOPE (Amplitude Correction) =====
         self.magnitude_corrector = nn.Sequential(
             nn.Linear(hidden_dim, 64 * 40),
             nn.Unflatten(1, (64, 40)),
@@ -417,74 +418,51 @@ class AdvancedHybridDecoder(nn.Module):
             nn.Sigmoid()  # Output [0, 1] scaling factor
         )
         
-        # Learnable weights
+        # Learnable mixing weights
         self.alpha_highfreq = nn.Parameter(torch.tensor(0.3))
         self.alpha_magnitude = nn.Parameter(torch.tensor(1.5))
     
     def forward(self, z_q):
         """
-        Returns dict compatible with VQAE23Loss.
-        
+        Args:
+            z_q: (B, embedding_dim)
         Returns:
-            - For training (return_auxiliary=True): dict with all components
-            - For inference: just the final signal (B, 32, 160)
+            (B, 32, 160) - final reconstructed signal
         """
         shared = self.projection(z_q)
         
-        # 1. Main reconstruction (MSE-optimized, phase-focused)
+        # Path 1: Main reconstruction (optimizes MSE/phase)
         main = self.main_decoder(shared)  # (B, 32, 160)
         
-        # 2. High-freq residual (preserves sharp details)
-        highfreq = self.highfreq_residual(shared)
+        # Path 2: High-freq residual (adds sharp details)
+        highfreq = self.highfreq_residual(shared)  # (B, 32, 160)
         highfreq_filtered = self._highpass_filter(highfreq, cutoff_hz=30)
         
-        # 3. Magnitude envelope correction (fixes amplitude)
+        # Path 3: Magnitude envelope (scales amplitude)
         mag_correction = self.magnitude_corrector(shared)  # (B, 32, 160) in [0, 1]
         
-        # 4. Combine all three
+        # Combine all three paths:
         # Step 1: Add high-freq details to main
         signal_with_highfreq = main + self.alpha_highfreq * highfreq_filtered
         
-        # Step 2: Apply magnitude correction
-        # Center mag_correction around 1.0 for stability
+        # Step 2: Apply magnitude scaling
+        # Center mag_correction around 1.0 instead of 0.5 for stability
         mag_scale = 0.5 + self.alpha_magnitude * mag_correction
         final_signal = signal_with_highfreq * mag_scale
         
-        # Return dict for compatibility with both loss and inference
-        # During training, loss can access auxiliary outputs
-        # During inference, forward() of VQAELight will just use final_signal
         return final_signal
-    
-    def forward_with_auxiliary(self, z_q):
-        """
-        Explicit method to get auxiliary outputs for advanced loss.
-        Call this from VQAELight if you want to use auxiliary losses.
-        """
-        shared = self.projection(z_q)
-        
-        main = self.main_decoder(shared)
-        highfreq = self.highfreq_residual(shared)
-        highfreq_filtered = self._highpass_filter(highfreq, cutoff_hz=30)
-        mag_correction = self.magnitude_corrector(shared)
-        
-        signal_with_highfreq = main + self.alpha_highfreq * highfreq_filtered
-        mag_scale = 0.5 + self.alpha_magnitude * mag_correction
-        final_signal = signal_with_highfreq * mag_scale
-        
-        return {
-            'signal': final_signal,
-            'main': main,
-            'highfreq': highfreq_filtered,
-            'magnitude_scale': mag_scale
-        }
     
     def _highpass_filter(self, x, cutoff_hz, fs=160):
         """Apply soft highpass filter in frequency domain."""
         X = torch.fft.rfft(x, dim=-1)
         freqs = torch.fft.rfftfreq(x.shape[-1], 1/fs).to(x.device)
+        
+        # Smooth transition (sigmoid) instead of hard cutoff
         mask = torch.sigmoid((freqs - cutoff_hz) * 0.5)
         X_filtered = X * mask[None, None, :]
+        
         return torch.fft.irfft(X_filtered, n=x.shape[-1], dim=-1)
+
 
 
 class MultiScaleDecoder(nn.Module):
