@@ -186,22 +186,22 @@ class SequenceVQVAELoss(TorchLoss):
         return {'loss': total_loss, 'recon_loss': recon_loss, 'vq_loss': vq_loss, 'bottleneck_loss': bottleneck_loss, 'bottleneck_var_loss': var_loss, 'bottleneck_cov_loss': decorr_loss}
     
 
-
 class VQAE23Loss(TorchLoss):
     """
-    Fixed version with absolute magnitude calibration.
+    Fixed version with absolute magnitude calibration and auto-balancing.
     """
     def __init__(
         self,
         mse_weight: float = 1.0,
         magnitude_weight: float = 1.0,
         phase_weight: float = 0.3,
-        power_weight: float = 0.5,  # NEW: enforce absolute power
+        power_weight: float = 0.5,
         bottleneck_var_weight: float = 0.1,
         bottleneck_cov_weight: float = 0.1,
         fs: int = 160,
         n_fft: int = 512,
-        phase_magnitude_threshold: float = 0.01
+        phase_magnitude_threshold: float = 0.01,
+        auto_balance: bool = True  # NEW: enable auto-balancing
     ):
         super().__init__(
             expected_model_output_keys=['reconstruction', 'embeddings', 'vq_loss'], 
@@ -212,17 +212,27 @@ class VQAE23Loss(TorchLoss):
         )
         self.name = "OptimalVQAELoss"
         
+        # Store raw weights (relative importance)
         self.mse_weight = mse_weight
         self.magnitude_weight = magnitude_weight
         self.phase_weight = phase_weight
-        self.power_weight = power_weight  # NEW
+        self.power_weight = power_weight
         self.bottleneck_var_weight = bottleneck_var_weight
         self.bottleneck_cov_weight = bottleneck_cov_weight
         
         self.fs = fs
         self.n_fft = n_fft
         self.phase_magnitude_threshold = phase_magnitude_threshold
-
+        self.auto_balance = auto_balance
+        
+        # Loss scales (computed from first batch)
+        self.loss_scales = {
+            'mse': 1.0,
+            'magnitude': 1.0,
+            'phase': 1.0,
+            'power': 1.0
+        }
+        self.scales_initialized = False
 
     def _magnitude_loss(self, recon, target):
         """Relative spectral shape (scale-invariant)."""
@@ -241,10 +251,9 @@ class VQAE23Loss(TorchLoss):
         
         return F.l1_loss(recon_log, target_log)
 
-
     def _power_loss(self, recon, target):
         """
-        NEW: Absolute power/energy constraint.
+        Absolute power/energy constraint.
         Forces model to match the global amplitude.
         """
         recon_fft = torch.fft.rfft(recon, n=self.n_fft, dim=-1)
@@ -258,9 +267,8 @@ class VQAE23Loss(TorchLoss):
         return F.l1_loss(torch.log(recon_power + 1e-8), 
                         torch.log(target_power + 1e-8))
 
-
     def _phase_loss(self, recon, target):
-        """Phase coherence (unchanged)."""
+        """Phase coherence."""
         recon_fft = torch.fft.rfft(recon, n=self.n_fft, dim=-1)
         target_fft = torch.fft.rfft(target, n=self.n_fft, dim=-1)
         
@@ -280,9 +288,8 @@ class VQAE23Loss(TorchLoss):
         
         return phase_error.sum() / (phase_mask.sum() + 1e-8)
 
-
     def _bottleneck_regularization(self, embeddings):
-        """Combined variance + decorrelation (unchanged)."""
+        """Combined variance + decorrelation."""
         if embeddings is None or embeddings.size(0) <= 1:
             return torch.tensor(0.0, device=embeddings.device if embeddings is not None else 'cpu')
         
@@ -300,21 +307,62 @@ class VQAE23Loss(TorchLoss):
         
         return self.bottleneck_var_weight * var_loss + self.bottleneck_cov_weight * decorr_loss
 
+    def _initialize_scales(self, mse_loss, magnitude_loss, phase_loss, power_loss):
+        """
+        Initialize loss scales from first batch.
+        Makes all losses approximately equal magnitude initially.
+        """
+        self.loss_scales['mse'] = max(mse_loss.item(), 1e-6)
+        self.loss_scales['magnitude'] = max(magnitude_loss.item(), 1e-6)
+        self.loss_scales['phase'] = max(phase_loss.item(), 1e-6)
+        self.loss_scales['power'] = max(power_loss.item(), 1e-6)
+        
+        self.scales_initialized = True
+        
+        print("=" * 70)
+        print("Loss scales initialized from first batch:")
+        print(f"  MSE scale:       {self.loss_scales['mse']:.4f}")
+        print(f"  Magnitude scale: {self.loss_scales['magnitude']:.4f}")
+        print(f"  Phase scale:     {self.loss_scales['phase']:.4f}")
+        print(f"  Power scale:     {self.loss_scales['power']:.4f}")
+        print("\nEffective weights (weight / scale):")
+        print(f"  MSE:       {self.mse_weight / self.loss_scales['mse']:.4f}")
+        print(f"  Magnitude: {self.magnitude_weight / self.loss_scales['magnitude']:.4f}")
+        print(f"  Phase:     {self.phase_weight / self.loss_scales['phase']:.4f}")
+        print(f"  Power:     {self.power_weight / self.loss_scales['power']:.4f}")
+        print("=" * 70)
 
     def _compute_loss(self, outputs: dict, batch: dict) -> dict:
-        """Main loss computation."""
+        """Main loss computation with auto-balancing."""
         target = batch['target']  # (B, 32, 640)
         recon = outputs['reconstruction']  # (B, 32, 640)
         embeddings = outputs.get('embeddings', None)
         vq_loss = outputs.get('vq_loss', torch.tensor(0.0, device=target.device))
         
-        # Time-domain MSE
+        # Compute individual losses (raw values)
         mse_loss = F.mse_loss(recon, target)
-        
-        # Frequency-domain losses
-        magnitude_loss = self._magnitude_loss(recon, target)  # Spectral shape
-        power_loss = self._power_loss(recon, target)          # Absolute scale
+        magnitude_loss = self._magnitude_loss(recon, target)
+        power_loss = self._power_loss(recon, target)
         phase_loss = self._phase_loss(recon, target)
+        
+        # Initialize scales from first batch
+        if self.auto_balance and not self.scales_initialized:
+            with torch.no_grad():
+                self._initialize_scales(mse_loss, magnitude_loss, phase_loss, power_loss)
+        
+        # Apply scale normalization + user weights
+        if self.auto_balance:
+            # Normalized: (user_weight / initial_scale) * current_loss
+            mse_term = (self.mse_weight / self.loss_scales['mse']) * mse_loss
+            mag_term = (self.magnitude_weight / self.loss_scales['magnitude']) * magnitude_loss
+            phase_term = (self.phase_weight / self.loss_scales['phase']) * phase_loss
+            power_term = (self.power_weight / self.loss_scales['power']) * power_loss
+        else:
+            # No auto-balancing, use raw weights
+            mse_term = self.mse_weight * mse_loss
+            mag_term = self.magnitude_weight * magnitude_loss
+            phase_term = self.phase_weight * phase_loss
+            power_term = self.power_weight * power_loss
         
         # Bottleneck regularization
         if embeddings is not None and embeddings.dim() == 3:
@@ -324,23 +372,24 @@ class VQAE23Loss(TorchLoss):
         
         # Total loss
         total_loss = (
-            self.mse_weight * mse_loss +
-            self.magnitude_weight * magnitude_loss +
-            self.power_weight * power_loss +           # NEW
-            self.phase_weight * phase_loss +
+            mse_term +
+            mag_term +
+            power_term +
+            phase_term +
             vq_loss +
             bottleneck_loss
         )
         
         return {
             'loss': total_loss,
-            'mse_loss': mse_loss,
+            'mse_loss': mse_loss,  # Return raw values for logging
             'magnitude_loss': magnitude_loss,
-            'power_loss': power_loss,                  # NEW
+            'power_loss': power_loss,
             'phase_loss': phase_loss,
             'vq_loss': vq_loss,
             'bottleneck_loss': bottleneck_loss
         }
+
     
 
 class CustomMSE(TorchLoss):
