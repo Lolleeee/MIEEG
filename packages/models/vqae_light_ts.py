@@ -352,24 +352,56 @@ class EfficientChannelAttention(nn.Module):
         attn_weights = self.attention(x)  # (B, C, 1)
         return x * attn_weights
 
-class AdvancedHybridDecoder(nn.Module):
+class SOTATimeFrequencyDecoder(nn.Module):
     """
-    Three-path decoder: Main (phase) + High-freq (details) + Magnitude (envelope).
-    Prevents magnitude-phase conflict by separating reconstruction paths.
+    State-of-the-art decoder combining insights from RAVE, D-FaST, and TF-Fusion.
+    
+    Key principles:
+    1. Multi-scale processing (like RAVE's multi-band)
+    2. Separate time/freq encodings (like TF-Fusion)
+    3. Cross-attention fusion (like D-FaST)
     """
     def __init__(self, config: VQAELightConfig):
         super().__init__()
         self.config = config
         hidden_dim = max(512, config.embedding_dim // 2)
         
+        # Shared projection
         self.projection = nn.Sequential(
             nn.Linear(config.embedding_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.GELU()
         )
         
-        # ===== PATH 1: MAIN DECODER (Phase/Timing) =====
-        self.main_decoder = nn.Sequential(
+        # ===== FREQUENCY DOMAIN BRANCH =====
+        # Reconstructs spectral features (magnitude + phase)
+        self.freq_branch = nn.Sequential(
+            nn.Linear(hidden_dim, 128 * 40),
+            nn.Unflatten(1, (128, 40)),
+            
+            nn.ConvTranspose1d(128, 64, kernel_size=4, stride=2, padding=1),
+            nn.GroupNorm(8, 64),
+            nn.GELU(),
+            
+            DepthwiseSeparableConv1d(64, 64, kernel_size=7),
+            nn.GroupNorm(8, 64),
+            nn.GELU()
+        )
+        
+        # Separate heads for magnitude and phase
+        self.freq_magnitude_head = nn.Sequential(
+            nn.Conv1d(64, config.orig_channels, 1),
+            nn.Softplus()
+        )
+        
+        self.freq_phase_head = nn.Sequential(
+            nn.Conv1d(64, config.orig_channels, 1),
+            nn.Tanh()  # [-π, π]
+        )
+        
+        # ===== TIME DOMAIN BRANCH =====
+        # Reconstructs temporal structure
+        self.time_branch = nn.Sequential(
             nn.Linear(hidden_dim, 256 * 40),
             nn.Unflatten(1, (256, 40)),
             
@@ -382,86 +414,91 @@ class AdvancedHybridDecoder(nn.Module):
             
             nn.ConvTranspose1d(128, 64, kernel_size=8, stride=2, padding=3),
             nn.GroupNorm(8, 64),
+            nn.GELU()
+        )
+        
+        # ===== CROSS-ATTENTION FUSION =====
+        # Fuses time and frequency information
+        self.cross_attention = nn.MultiheadAttention(
+            embed_dim=64,
+            num_heads=8,
+            batch_first=True
+        )
+        
+        # Final projection after fusion
+        self.fusion_head = nn.Sequential(
+            nn.Conv1d(64, 64, 1),
             nn.GELU(),
             EfficientResidualBlock1d(64),
             nn.Conv1d(64, config.orig_channels, 1)
         )
         
-        # ===== PATH 2: HIGH-FREQ RESIDUAL (Sharp Details) =====
-        self.highfreq_residual = nn.Sequential(
-            nn.Linear(hidden_dim, 128 * 40),
-            nn.Unflatten(1, (128, 40)),
-            
-            # Sharp upsampling for high-freq
-            nn.ConvTranspose1d(128, 64, kernel_size=4, stride=4, padding=0),
-            nn.GroupNorm(8, 64),
-            nn.GELU(),
-            
-            # Small kernels to preserve sharpness
-            DepthwiseSeparableConv1d(64, 32, kernel_size=3),
-            nn.GroupNorm(8, 32),
-            nn.GELU(),
-            nn.Conv1d(32, config.orig_channels, 1)
-        )
-        
-        # ===== PATH 3: MAGNITUDE ENVELOPE (Amplitude Correction) =====
-        self.magnitude_corrector = nn.Sequential(
-            nn.Linear(hidden_dim, 64 * 40),
-            nn.Unflatten(1, (64, 40)),
-            
-            # Very smooth upsampling (captures slow amplitude envelope)
-            nn.Upsample(scale_factor=4, mode='linear', align_corners=False),
-            DepthwiseSeparableConv1d(64, 32, kernel_size=21),  # Extra large kernel
-            nn.GroupNorm(8, 32),
-            nn.GELU(),
-            nn.Conv1d(32, config.orig_channels, 1),
-            nn.Sigmoid()  # Output [0, 1] scaling factor
-        )
-        
-        # Learnable mixing weights
-        self.alpha_highfreq = nn.Parameter(torch.tensor(0.3))
-        self.alpha_magnitude = nn.Parameter(torch.tensor(1.5))
+        # Learnable weights
+        self.alpha_freq = nn.Parameter(torch.tensor(0.7))  # Favor frequency reconstruction
     
     def forward(self, z_q):
         """
         Args:
             z_q: (B, embedding_dim)
         Returns:
-            (B, 32, 160) - final reconstructed signal
+            (B, 32, 160) - final signal
         """
         shared = self.projection(z_q)
         
-        # Path 1: Main reconstruction (optimizes MSE/phase)
-        main = self.main_decoder(shared)  # (B, 32, 160)
+        # Branch 1: Frequency domain
+        freq_features = self.freq_branch(shared)  # (B, 64, 81)
+        freq_magnitude = self.freq_magnitude_head(freq_features)  # (B, 32, 81)
+        freq_phase = self.freq_phase_head(freq_features) * torch.pi  # (B, 32, 81)
         
-        # Path 2: High-freq residual (adds sharp details)
-        highfreq = self.highfreq_residual(shared)  # (B, 32, 160)
-        highfreq_filtered = self._highpass_filter(highfreq, cutoff_hz=30)
+        # Branch 2: Time domain  
+        time_features = self.time_branch(shared)  # (B, 64, 160)
         
-        # Path 3: Magnitude envelope (scales amplitude)
-        mag_correction = self.magnitude_corrector(shared)  # (B, 32, 160) in [0, 1]
+        # Cross-attention fusion
+        # Query: time features, Key/Value: freq features (upsampled)
+        freq_features_upsampled = F.interpolate(
+            freq_features, 
+            size=time_features.shape[-1], 
+            mode='linear', 
+            align_corners=False
+        )  # (B, 64, 160)
         
-        # Combine all three paths:
-        # Step 1: Add high-freq details to main
-        signal_with_highfreq = main + self.alpha_highfreq * highfreq_filtered
+        # Reshape for attention: (B, T, C)
+        time_attn = time_features.transpose(1, 2)  # (B, 160, 64)
+        freq_attn = freq_features_upsampled.transpose(1, 2)  # (B, 160, 64)
         
-        # Step 2: Apply magnitude scaling
-        # Center mag_correction around 1.0 instead of 0.5 for stability
-        mag_scale = 0.5 + self.alpha_magnitude * mag_correction
-        final_signal = signal_with_highfreq * mag_scale
+        # Cross-attention: time attends to frequency
+        fused_features, _ = self.cross_attention(
+            query=time_attn,
+            key=freq_attn,
+            value=freq_attn
+        )  # (B, 160, 64)
         
-        return final_signal
+        fused_features = fused_features.transpose(1, 2)  # (B, 64, 160)
+        
+        # Time-domain reconstruction from fusion
+        time_recon = self.fusion_head(fused_features)  # (B, 32, 160)
+        
+        # Frequency-domain reconstruction
+        freq_recon = self._freq_to_time(freq_magnitude, freq_phase, target_length=160)
+        
+        # Combine both paths (learnable weighting)
+        final = self.alpha_freq * freq_recon + (1 - self.alpha_freq) * time_recon
+        
+        return final
     
-    def _highpass_filter(self, x, cutoff_hz, fs=160):
-        """Apply soft highpass filter in frequency domain."""
-        X = torch.fft.rfft(x, dim=-1)
-        freqs = torch.fft.rfftfreq(x.shape[-1], 1/fs).to(x.device)
+    def _freq_to_time(self, magnitude, phase, target_length):
+        """Convert frequency domain to time domain."""
+        n_fft = (target_length // 2) + 1
         
-        # Smooth transition (sigmoid) instead of hard cutoff
-        mask = torch.sigmoid((freqs - cutoff_hz) * 0.5)
-        X_filtered = X * mask[None, None, :]
+        if magnitude.shape[-1] != n_fft:
+            magnitude = F.interpolate(magnitude, size=n_fft, mode='linear', align_corners=False)
+            phase = F.interpolate(phase, size=n_fft, mode='linear', align_corners=False)
         
-        return torch.fft.irfft(X_filtered, n=x.shape[-1], dim=-1)
+        complex_spectrum = magnitude * torch.exp(1j * phase)
+        time_signal = torch.fft.irfft(complex_spectrum, n=target_length, dim=-1)
+        
+        return time_signal
+
 
 
 
@@ -566,7 +603,7 @@ class VQAELight(nn.Module):
             config.epsilon
         )
         
-        self.decoder = AdvancedHybridDecoder(config)
+        self.decoder = SOTATimeFrequencyDecoder(config)
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
