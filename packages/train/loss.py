@@ -185,10 +185,9 @@ class SequenceVQVAELoss(TorchLoss):
         
         return {'loss': total_loss, 'recon_loss': recon_loss, 'vq_loss': vq_loss, 'bottleneck_loss': bottleneck_loss, 'bottleneck_var_loss': var_loss, 'bottleneck_cov_loss': decorr_loss}
     
-
 class VQAE23Loss(TorchLoss):
     """
-    Fixed version with absolute magnitude calibration and auto-balancing.
+    Fixed version with absolute magnitude calibration and running average auto-balancing.
     """
     def __init__(
         self,
@@ -201,7 +200,9 @@ class VQAE23Loss(TorchLoss):
         fs: int = 160,
         n_fft: int = 512,
         phase_magnitude_threshold: float = 0.01,
-        auto_balance: bool = True  # NEW: enable auto-balancing
+        auto_balance: bool = True,
+        warmup_batches: int = 100,  # NEW: calibrate over first N batches
+        momentum: float = 0.9        # NEW: exponential moving average momentum
     ):
         super().__init__(
             expected_model_output_keys=['reconstruction', 'embeddings', 'vq_loss'], 
@@ -224,15 +225,18 @@ class VQAE23Loss(TorchLoss):
         self.n_fft = n_fft
         self.phase_magnitude_threshold = phase_magnitude_threshold
         self.auto_balance = auto_balance
+        self.warmup_batches = warmup_batches
+        self.momentum = momentum
         
-        # Loss scales (computed from first batch)
-        self.loss_scales = {
-            'mse': 1.0,
-            'magnitude': 1.0,
-            'phase': 1.0,
-            'power': 1.0
-        }
-        self.scales_initialized = False
+        # Running average of loss scales (like BatchNorm running mean)
+        self.register_buffer('loss_scale_mse', torch.tensor(1.0))
+        self.register_buffer('loss_scale_magnitude', torch.tensor(1.0))
+        self.register_buffer('loss_scale_phase', torch.tensor(1.0))
+        self.register_buffer('loss_scale_power', torch.tensor(1.0))
+        
+        # Track warmup progress
+        self.register_buffer('num_batches_seen', torch.tensor(0))
+        self.warmup_complete = False
 
     def _magnitude_loss(self, recon, target):
         """Relative spectral shape (scale-invariant)."""
@@ -242,7 +246,6 @@ class VQAE23Loss(TorchLoss):
         recon_psd = torch.abs(recon_fft) ** 2
         target_psd = torch.abs(target_fft) ** 2
         
-        # Normalize (scale-invariant)
         recon_psd_norm = recon_psd / (recon_psd.sum(dim=-1, keepdim=True) + 1e-8)
         target_psd_norm = target_psd / (target_psd.sum(dim=-1, keepdim=True) + 1e-8)
         
@@ -252,18 +255,13 @@ class VQAE23Loss(TorchLoss):
         return F.l1_loss(recon_log, target_log)
 
     def _power_loss(self, recon, target):
-        """
-        Absolute power/energy constraint.
-        Forces model to match the global amplitude.
-        """
+        """Absolute power/energy constraint."""
         recon_fft = torch.fft.rfft(recon, n=self.n_fft, dim=-1)
         target_fft = torch.fft.rfft(target, n=self.n_fft, dim=-1)
         
-        # Total power (Parseval's theorem: sum of PSD)
         recon_power = torch.sum(torch.abs(recon_fft) ** 2, dim=-1)
         target_power = torch.sum(torch.abs(target_fft) ** 2, dim=-1)
         
-        # L1 loss on log-power (scale-aware)
         return F.l1_loss(torch.log(recon_power + 1e-8), 
                         torch.log(target_power + 1e-8))
 
@@ -307,35 +305,47 @@ class VQAE23Loss(TorchLoss):
         
         return self.bottleneck_var_weight * var_loss + self.bottleneck_cov_weight * decorr_loss
 
-    def _initialize_scales(self, mse_loss, magnitude_loss, phase_loss, power_loss):
+    def _update_running_scales(self, mse_loss, magnitude_loss, phase_loss, power_loss):
         """
-        Initialize loss scales from first batch.
-        Makes all losses approximately equal magnitude initially.
+        Update running averages of loss scales using exponential moving average.
+        Similar to BatchNorm's running mean/variance.
         """
-        self.loss_scales['mse'] = max(mse_loss.item(), 1e-6)
-        self.loss_scales['magnitude'] = max(magnitude_loss.item(), 1e-6)
-        self.loss_scales['phase'] = max(phase_loss.item(), 1e-6)
-        self.loss_scales['power'] = max(power_loss.item(), 1e-6)
+        if self.num_batches_seen == 0:
+            # First batch: initialize with current values
+            self.loss_scale_mse.copy_(mse_loss.detach())
+            self.loss_scale_magnitude.copy_(magnitude_loss.detach())
+            self.loss_scale_phase.copy_(phase_loss.detach())
+            self.loss_scale_power.copy_(power_loss.detach())
+        else:
+            # Exponential moving average: scale = momentum * scale + (1-momentum) * new_value
+            self.loss_scale_mse.mul_(self.momentum).add_(mse_loss.detach(), alpha=1 - self.momentum)
+            self.loss_scale_magnitude.mul_(self.momentum).add_(magnitude_loss.detach(), alpha=1 - self.momentum)
+            self.loss_scale_phase.mul_(self.momentum).add_(phase_loss.detach(), alpha=1 - self.momentum)
+            self.loss_scale_power.mul_(self.momentum).add_(power_loss.detach(), alpha=1 - self.momentum)
         
-        self.scales_initialized = True
+        self.num_batches_seen += 1
         
-        print("=" * 70)
-        print("Loss scales initialized from first batch:")
-        print(f"  MSE scale:       {self.loss_scales['mse']:.4f}")
-        print(f"  Magnitude scale: {self.loss_scales['magnitude']:.4f}")
-        print(f"  Phase scale:     {self.loss_scales['phase']:.4f}")
-        print(f"  Power scale:     {self.loss_scales['power']:.4f}")
-        print("\nEffective weights (weight / scale):")
-        print(f"  MSE:       {self.mse_weight / self.loss_scales['mse']:.4f}")
-        print(f"  Magnitude: {self.magnitude_weight / self.loss_scales['magnitude']:.4f}")
-        print(f"  Phase:     {self.phase_weight / self.loss_scales['phase']:.4f}")
-        print(f"  Power:     {self.power_weight / self.loss_scales['power']:.4f}")
-        print("=" * 70)
+        # Mark warmup as complete
+        if self.num_batches_seen >= self.warmup_batches and not self.warmup_complete:
+            self.warmup_complete = True
+            print("=" * 70)
+            print(f"Loss scale warmup complete after {self.warmup_batches} batches!")
+            print(f"Final running averages:")
+            print(f"  MSE scale:       {self.loss_scale_mse.item():.4f}")
+            print(f"  Magnitude scale: {self.loss_scale_magnitude.item():.4f}")
+            print(f"  Phase scale:     {self.loss_scale_phase.item():.4f}")
+            print(f"  Power scale:     {self.loss_scale_power.item():.4f}")
+            print(f"\nEffective weights (weight / scale):")
+            print(f"  MSE:       {self.mse_weight / self.loss_scale_mse.item():.4f}")
+            print(f"  Magnitude: {self.magnitude_weight / self.loss_scale_magnitude.item():.4f}")
+            print(f"  Phase:     {self.phase_weight / self.loss_scale_phase.item():.4f}")
+            print(f"  Power:     {self.power_weight / self.loss_scale_power.item():.4f}")
+            print("=" * 70)
 
     def _compute_loss(self, outputs: dict, batch: dict) -> dict:
-        """Main loss computation with auto-balancing."""
-        target = batch['target']  # (B, 32, 640)
-        recon = outputs['reconstruction']  # (B, 32, 640)
+        """Main loss computation with running average auto-balancing."""
+        target = batch['target']
+        recon = outputs['reconstruction']
         embeddings = outputs.get('embeddings', None)
         vq_loss = outputs.get('vq_loss', torch.tensor(0.0, device=target.device))
         
@@ -345,18 +355,19 @@ class VQAE23Loss(TorchLoss):
         power_loss = self._power_loss(recon, target)
         phase_loss = self._phase_loss(recon, target)
         
-        # Initialize scales from first batch
-        if self.auto_balance and not self.scales_initialized:
-            with torch.no_grad():
-                self._initialize_scales(mse_loss, magnitude_loss, phase_loss, power_loss)
+        # Update running averages during warmup (training only)
+        if self.auto_balance and self.training and self.num_batches_seen < self.warmup_batches:
+            self._update_running_scales(mse_loss, magnitude_loss, phase_loss, power_loss)
         
         # Apply scale normalization + user weights
         if self.auto_balance:
-            # Normalized: (user_weight / initial_scale) * current_loss
-            mse_term = (self.mse_weight / self.loss_scales['mse']) * mse_loss
-            mag_term = (self.magnitude_weight / self.loss_scales['magnitude']) * magnitude_loss
-            phase_term = (self.phase_weight / self.loss_scales['phase']) * phase_loss
-            power_term = (self.power_weight / self.loss_scales['power']) * power_loss
+            # Use running averages for normalization
+            # Add small epsilon to avoid division by zero
+            eps = 1e-6
+            mse_term = (self.mse_weight / (self.loss_scale_mse + eps)) * mse_loss
+            mag_term = (self.magnitude_weight / (self.loss_scale_magnitude + eps)) * magnitude_loss
+            phase_term = (self.phase_weight / (self.loss_scale_phase + eps)) * phase_loss
+            power_term = (self.power_weight / (self.loss_scale_power + eps)) * power_loss
         else:
             # No auto-balancing, use raw weights
             mse_term = self.mse_weight * mse_loss
@@ -382,7 +393,7 @@ class VQAE23Loss(TorchLoss):
         
         return {
             'loss': total_loss,
-            'mse_loss': mse_loss,  # Return raw values for logging
+            'mse_loss': mse_loss,
             'magnitude_loss': magnitude_loss,
             'power_loss': power_loss,
             'phase_loss': phase_loss,
