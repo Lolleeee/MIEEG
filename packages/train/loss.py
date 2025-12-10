@@ -201,8 +201,8 @@ class VQAE23Loss(TorchLoss):
         n_fft: int = 512,
         phase_magnitude_threshold: float = 0.01,
         auto_balance: bool = True,
-        warmup_batches: int = 100,  # NEW: calibrate over first N batches
-        momentum: float = 0.9        # NEW: exponential moving average momentum
+        warmup_batches: int = 100,
+        momentum: float = 0.9
     ):
         super().__init__(
             expected_model_output_keys=['reconstruction', 'embeddings', 'vq_loss'], 
@@ -213,7 +213,6 @@ class VQAE23Loss(TorchLoss):
         )
         self.name = "OptimalVQAELoss"
         
-        # Store raw weights (relative importance)
         self.mse_weight = mse_weight
         self.magnitude_weight = magnitude_weight
         self.phase_weight = phase_weight
@@ -228,14 +227,13 @@ class VQAE23Loss(TorchLoss):
         self.warmup_batches = warmup_batches
         self.momentum = momentum
         
-        # Running average of loss scales (like BatchNorm running mean)
+        # Running average of loss scales - will be moved to device on first use
         self.register_buffer('loss_scale_mse', torch.tensor(1.0))
         self.register_buffer('loss_scale_magnitude', torch.tensor(1.0))
         self.register_buffer('loss_scale_phase', torch.tensor(1.0))
         self.register_buffer('loss_scale_power', torch.tensor(1.0))
+        self.register_buffer('num_batches_seen', torch.tensor(0, dtype=torch.long))
         
-        # Track warmup progress
-        self.register_buffer('num_batches_seen', torch.tensor(0))
         self.warmup_complete = False
 
     def _magnitude_loss(self, recon, target):
@@ -308,20 +306,34 @@ class VQAE23Loss(TorchLoss):
     def _update_running_scales(self, mse_loss, magnitude_loss, phase_loss, power_loss):
         """
         Update running averages of loss scales using exponential moving average.
-        Similar to BatchNorm's running mean/variance.
+        Ensures all tensors are on the same device.
         """
+        # Get scalar values and ensure they're on the right device
+        mse_val = mse_loss.detach()
+        mag_val = magnitude_loss.detach()
+        phase_val = phase_loss.detach()
+        power_val = power_loss.detach()
+        
+        # Move buffers to same device as losses (on first call)
+        if self.loss_scale_mse.device != mse_val.device:
+            self.loss_scale_mse = self.loss_scale_mse.to(mse_val.device)
+            self.loss_scale_magnitude = self.loss_scale_magnitude.to(mse_val.device)
+            self.loss_scale_phase = self.loss_scale_phase.to(mse_val.device)
+            self.loss_scale_power = self.loss_scale_power.to(mse_val.device)
+            self.num_batches_seen = self.num_batches_seen.to(mse_val.device)
+        
         if self.num_batches_seen == 0:
             # First batch: initialize with current values
-            self.loss_scale_mse.copy_(mse_loss.detach())
-            self.loss_scale_magnitude.copy_(magnitude_loss.detach())
-            self.loss_scale_phase.copy_(phase_loss.detach())
-            self.loss_scale_power.copy_(power_loss.detach())
+            self.loss_scale_mse.copy_(mse_val)
+            self.loss_scale_magnitude.copy_(mag_val)
+            self.loss_scale_phase.copy_(phase_val)
+            self.loss_scale_power.copy_(power_val)
         else:
-            # Exponential moving average: scale = momentum * scale + (1-momentum) * new_value
-            self.loss_scale_mse.mul_(self.momentum).add_(mse_loss.detach(), alpha=1 - self.momentum)
-            self.loss_scale_magnitude.mul_(self.momentum).add_(magnitude_loss.detach(), alpha=1 - self.momentum)
-            self.loss_scale_phase.mul_(self.momentum).add_(phase_loss.detach(), alpha=1 - self.momentum)
-            self.loss_scale_power.mul_(self.momentum).add_(power_loss.detach(), alpha=1 - self.momentum)
+            # Exponential moving average
+            self.loss_scale_mse.mul_(self.momentum).add_(mse_val, alpha=1 - self.momentum)
+            self.loss_scale_magnitude.mul_(self.momentum).add_(mag_val, alpha=1 - self.momentum)
+            self.loss_scale_phase.mul_(self.momentum).add_(phase_val, alpha=1 - self.momentum)
+            self.loss_scale_power.mul_(self.momentum).add_(power_val, alpha=1 - self.momentum)
         
         self.num_batches_seen += 1
         
@@ -362,7 +374,6 @@ class VQAE23Loss(TorchLoss):
         # Apply scale normalization + user weights
         if self.auto_balance:
             # Use running averages for normalization
-            # Add small epsilon to avoid division by zero
             eps = 1e-6
             mse_term = (self.mse_weight / (self.loss_scale_mse + eps)) * mse_loss
             mag_term = (self.magnitude_weight / (self.loss_scale_magnitude + eps)) * magnitude_loss
