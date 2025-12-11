@@ -12,19 +12,18 @@ from packages.train.trainer_config_schema import (
     CustomPlotTypes
 )
 from packages.train.training import Trainer
-from packages.models.vqae_light_ts import VQAELight, VQAELightConfig
+from packages.models.vqae_light import VQAELightConfig
 from packages.data_objects.dataset import autoencoder_unpack_func
 model_config = VQAELightConfig(
     use_quantizer=False,
     use_cwt=True,
-    chunk_samples=160
 )
 
     
 
 config = {
     'model': {
-        'model_type': ModelType.VQAE23_LTS,
+        'model_type': ModelType.VQAE23_SMALL,
         'model_kwargs': {
             'config': model_config
         }
@@ -43,11 +42,12 @@ config = {
             },
             'batch_size': 32,
             'norm_axes': (0, 2),
-            'target_norm_axes': (0, 2)
+            'target_norm_axes': (0, 2),
+            'nsamples': 5
         }
     },
     'loss': {
-        'loss_type': LossType.VQAE23LOSS,
+        'loss_type': LossType.INMODELMSE,
         'loss_kwargs': {}
     },
     'optimizer': {
@@ -68,7 +68,7 @@ config = {
         'history_plot': {
             'plot_type': PlotType.EXTENDED,
             'save_path': './training_history',
-            'metrics_logged': ['MSE']
+            'metrics_logged': ['loss']
         },
         'early_stopping': {
             'patience': 1000,
@@ -86,7 +86,7 @@ config = {
         }
     },
     'info': {
-        'metrics': [MetricType.MSE],
+        'metrics': [],
         'metrics_args': None,
 
     },

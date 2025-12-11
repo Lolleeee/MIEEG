@@ -5,11 +5,12 @@ from torch import nn, optim, cuda
 from torch import device as torchdevice
 from typing import Optional, Literal, List, Any, Set, Union
 from packages.train.metrics import TorchMetric, RMSE, MSE, MAE, AxisCorrelation
-from packages.train.loss import TorchLoss, TorchMSELoss, TorchL1Loss, SequenceVQVAELoss, VQAE23Loss
+from packages.train.loss import TorchLoss, TorchMSELoss, TorchL1Loss, SequenceVQVAELoss, VQAE23Loss, CustomMSE
 from packages.models.vqae_skip import SequenceVQAE as SequenceVQAE_Skip
 from packages.models.vqae import VQVAE
 from packages.models.vqae_light_ts import VQAELight as VQAE23_LTS
-from packages.models.vqae_light import VQAELight
+from packages.models.vqae_light import VQAELight as VQAE23_small
+from packages.models.vqae_23 import VQAE23
 from packages.models.test_models import SimpleVQVAE, SimpleAutoencoder
 from packages.data_objects.dataset import TestTorchH5Dataset, TestTorchH5DatasetContiguous, TorchDataset, TestTorchDataset, TorchH5Dataset
 from enum import Enum
@@ -24,13 +25,13 @@ class CustomPlotTypes(str, Enum):
     RECONSTRUCTIONS_FREQ = "reconstructions_freq"
 
 class ModelType(str, Enum):
-    SEQUENCE_VQAE_SKIP = "sequence_vqae_skip"
-    VQVAE = "vqvae"
+    VQAE23_LTS = "vqae23_lts"
+    COMVQAE23 = "com_vqae23"
+    VQAE23_SMALL = "vqae23_small"
     #Test models
     SIMPLE_VQVAE = "simple_vqvae"
     SIMPLE_AE = "simple_ae"
-    VQAE23_LTS = "vqae23_lts"
-    COMVQAE23 = "com_vqae23"
+
 
 class OptimizerType(str, Enum):
     ADAM = "adam"
@@ -42,6 +43,7 @@ class LossType(str, Enum):
     L1 = "l1"
     SEQVQVAELOSS = "seq_vqvae_loss"
     VQAE23LOSS = "vqae23_loss"
+    INMODELMSE = "inmodel_mse"
 
 
 class DatasetType(str, Enum):
@@ -74,11 +76,10 @@ CUSTOM_PLOTS_MAP = {
     CustomPlotTypes.RECONSTRUCTIONS_FREQ: plot_raweeg_fft_reconstruction,
 }
 MODEL_MAP = {
-    ModelType.VQVAE: VQVAE,
-    ModelType.SEQUENCE_VQAE_SKIP: SequenceVQAE_Skip,
     ModelType.SIMPLE_VQVAE: SimpleVQVAE,
-    ModelType.COMVQAE23: VQAELight,
+    ModelType.COMVQAE23: VQAE23,
     ModelType.VQAE23_LTS: VQAE23_LTS,
+    ModelType.VQAE23_SMALL: VQAE23_small,
 }
 
 OPTIMIZER_MAP = {
@@ -91,6 +92,7 @@ LOSS_MAP = {
     LossType.L1: TorchL1Loss,
     LossType.SEQVQVAELOSS: SequenceVQVAELoss,
     LossType.VQAE23LOSS: VQAE23Loss,
+    LossType.INMODELMSE: CustomMSE
 }
 
 DATASET_MAP = {
@@ -261,7 +263,7 @@ class Info(BaseModel):
         return [METRIC_MAP.get(m) for m in self.metrics]
     
 class ModelConfig(BaseModel):
-    model_type: ModelType = Field(default=ModelType.VQVAE, description="Fully qualified model class name (e.g., 'models.MyModel')")
+    model_type: ModelType = Field(default=None, description="Fully qualified model class name (e.g., 'models.MyModel')")
     model_kwargs: dict = Field(default_factory=dict, description="Kwargs to instantiate model")
 
 class LossConfig(BaseModel):

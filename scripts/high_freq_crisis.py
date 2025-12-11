@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
-from packages.models.vqae_light import VQAELight, VQAELightConfig
+from packages.models.vqae_light import VQAE23, VQAE23Config
 def quick_frequency_test(model, config, device='cuda' if torch.cuda.is_available() else 'cpu'):
     """
     Fast test: Generate pure frequency signals and check reconstruction quality.
@@ -227,14 +227,14 @@ def trace_frequency_through_decoder(model, freq=40, device='cpu'):
 
 if __name__ == "__main__":
     # Your existing model setup
-    config = VQAELightConfig(
+    config = VQAE23Config(
         num_input_channels=2, num_freq_bands=25, spatial_rows=7, spatial_cols=5, 
         time_samples=160, use_cwt=True, chunk_samples=160, 
         use_inverse_cwt=False,  # Test without iCWT first
         embedding_dim=1024  # Your 1024-dim test
     )
     
-    model = VQAELight(config)
+    model = VQAE23(config)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     # 1. Quick overall test (10 seconds)

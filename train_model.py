@@ -5,13 +5,13 @@ train_loader, _, _ = get_data_loaders(dataset, norm_axes=(0,2), target_norm_axes
 
 batch = next(iter(train_loader))
 
-from packages.models.vqae_light import VQAELight, VQAELightConfig
-config = VQAELightConfig(
+from packages.models.vqae_light import VQAE23, VQAE23Config
+config = VQAE23Config(
     use_quantizer=False,
     use_cwt=True,
     chunk_samples=160
 )
-model = VQAELight(config)
+model = VQAE23(config)
 import torch
 with torch.no_grad():
     out = model(batch['input'])

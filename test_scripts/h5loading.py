@@ -119,14 +119,14 @@ if __name__ == "__main__":
     print("After norm  - Target mean:", single_target.mean().item(), "std:", single_target.std().item())
     
     # Create model
-    from packages.models.vqae_light import VQAELight, VQAELightConfig
+    from packages.models.vqae_light import VQAE23, VQAE23Config
     
-    config = VQAELightConfig(
+    config = VQAE23Config(
         use_quantizer=False,  # Disable VQ for easier overfitting test
         use_cwt=True
     )
     
-    model = VQAELight(config)
+    model = VQAE23(config)
     model.train()
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)

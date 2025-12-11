@@ -256,7 +256,7 @@ class CWTHead(nn.Module):
         Bn, C, chunk_T = x.shape
         if self.chunk_size_samples is None:
             return x
-        x = x.view(-1, C, self.num_chunks * chunk_T)
+        x = x.reshape(-1, C, self.num_chunks * chunk_T)
         return x
 
     
