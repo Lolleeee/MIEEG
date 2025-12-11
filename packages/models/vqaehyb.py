@@ -9,14 +9,13 @@ import numpy as np
 @dataclass
 class VQAELightConfig:
     use_quantizer: bool = False
-    use_cwt: bool = True
 
     # CWT parameters
     cwt_frequencies: tuple = None
-    chunk_samples: int = 160  # if None, no chunking
-    use_log_compression = True
-    normalize_outputs = True
-    learnable_norm = True
+    chunk_samples: int = 160
+    use_log_compression: bool = True
+    normalize_outputs: bool = True
+    learnable_norm: bool = True
 
     # Data shape parameters
     num_input_channels: int = 2   # power + phase
@@ -143,6 +142,7 @@ class SqueezeExcitation2D(nn.Module):
             nn.Conv2d(reduced, channels, 1),
             nn.Sigmoid()
         )
+    
     def forward(self, x):
         return x * self.se(x)
 
@@ -158,6 +158,7 @@ class SqueezeExcitation3D(nn.Module):
             nn.Conv3d(reduced, channels, 1),
             nn.Sigmoid()
         )
+    
     def forward(self, x):
         return x * self.se(x)
 
@@ -302,6 +303,7 @@ class Encoder3DStageLight(nn.Module):
         x = self.conv_net(x)
         return self.projection(x)
 
+
 class DepthwiseSeparableConv1d(nn.Module):
     def __init__(self, channels, out_channels, kernel_size=3):
         super().__init__()
@@ -350,8 +352,9 @@ class EfficientChannelAttention(nn.Module):
         )
     
     def forward(self, x):
-        attn_weights = self.attention(x)  # (B, C, 1)
+        attn_weights = self.attention(x)
         return x * attn_weights
+
 
 class SOTATimeFrequencyDecoder(nn.Module):
     """
@@ -375,7 +378,6 @@ class SOTATimeFrequencyDecoder(nn.Module):
         )
         
         # ===== FREQUENCY DOMAIN BRANCH =====
-        # Reconstructs spectral features (magnitude + phase)
         self.freq_branch = nn.Sequential(
             nn.Linear(hidden_dim, 128 * 40),
             nn.Unflatten(1, (128, 40)),
@@ -397,11 +399,10 @@ class SOTATimeFrequencyDecoder(nn.Module):
         
         self.freq_phase_head = nn.Sequential(
             nn.Conv1d(64, config.orig_channels, 1),
-            nn.Tanh()  # [-π, π]
+            nn.Tanh()
         )
         
         # ===== TIME DOMAIN BRANCH =====
-        # Reconstructs temporal structure
         self.time_branch = nn.Sequential(
             nn.Linear(hidden_dim, 256 * 40),
             nn.Unflatten(1, (256, 40)),
@@ -419,7 +420,6 @@ class SOTATimeFrequencyDecoder(nn.Module):
         )
         
         # ===== CROSS-ATTENTION FUSION =====
-        # Fuses time and frequency information
         self.cross_attention = nn.MultiheadAttention(
             embed_dim=64,
             num_heads=8,
@@ -435,7 +435,7 @@ class SOTATimeFrequencyDecoder(nn.Module):
         )
         
         # Learnable weights
-        self.alpha_freq = nn.Parameter(torch.tensor(0.7))  # Favor frequency reconstruction
+        self.alpha_freq = nn.Parameter(torch.tensor(0.7))
     
     def forward(self, z_q):
         """
@@ -447,42 +447,41 @@ class SOTATimeFrequencyDecoder(nn.Module):
         shared = self.projection(z_q)
         
         # Branch 1: Frequency domain
-        freq_features = self.freq_branch(shared)  # (B, 64, 81)
-        freq_magnitude = self.freq_magnitude_head(freq_features)  # (B, 32, 81)
-        freq_phase = self.freq_phase_head(freq_features) * torch.pi  # (B, 32, 81)
+        freq_features = self.freq_branch(shared)
+        freq_magnitude = self.freq_magnitude_head(freq_features)
+        freq_phase = self.freq_phase_head(freq_features) * torch.pi
         
         # Branch 2: Time domain  
-        time_features = self.time_branch(shared)  # (B, 64, 160)
+        time_features = self.time_branch(shared)
         
         # Cross-attention fusion
-        # Query: time features, Key/Value: freq features (upsampled)
         freq_features_upsampled = F.interpolate(
             freq_features, 
             size=time_features.shape[-1], 
             mode='linear', 
             align_corners=False
-        )  # (B, 64, 160)
+        )
         
-        # Reshape for attention: (B, T, C)
-        time_attn = time_features.transpose(1, 2)  # (B, 160, 64)
-        freq_attn = freq_features_upsampled.transpose(1, 2)  # (B, 160, 64)
+        # Reshape for attention
+        time_attn = time_features.transpose(1, 2)
+        freq_attn = freq_features_upsampled.transpose(1, 2)
         
-        # Cross-attention: time attends to frequency
+        # Cross-attention
         fused_features, _ = self.cross_attention(
             query=time_attn,
             key=freq_attn,
             value=freq_attn
-        )  # (B, 160, 64)
+        )
         
-        fused_features = fused_features.transpose(1, 2)  # (B, 64, 160)
+        fused_features = fused_features.transpose(1, 2)
         
-        # Time-domain reconstruction from fusion
-        time_recon = self.fusion_head(fused_features)  # (B, 32, 160)
+        # Time-domain reconstruction
+        time_recon = self.fusion_head(fused_features)
         
         # Frequency-domain reconstruction
         freq_recon = self._freq_to_time(freq_magnitude, freq_phase, target_length=160)
         
-        # Combine both paths (learnable weighting)
+        # Combine both paths
         final = self.alpha_freq * freq_recon + (1 - self.alpha_freq) * time_recon
         
         return final
@@ -501,101 +500,38 @@ class SOTATimeFrequencyDecoder(nn.Module):
         return time_signal
 
 
-
-
-class MultiScaleDecoder(nn.Module):
-    """
-    Multi-scale decoder that reconstructs low and high frequencies separately.
-    Addresses time-frequency trade-off in EEG reconstruction.
-    """
-    def __init__(self, config: VQAELightConfig):
-        super().__init__()
-        self.config = config
-        
-        # Shared projection from bottleneck
-        self.projection = nn.Sequential(
-            nn.Linear(config.embedding_dim, 512),
-            nn.LayerNorm(512),
-            nn.GELU()
-        )
-        
-        # Low-frequency path (0-20 Hz) - smooth, long-range dependencies
-        self.low_freq_path = nn.Sequential(
-            nn.Linear(512, 128 * 40),
-            nn.Unflatten(1, (128, 40)),
-            nn.Upsample(scale_factor=4, mode='linear', align_corners=False),  # → 160
-            DepthwiseSeparableConv1d(128, 64, kernel_size=9),  # Large kernel for smooth features
-            nn.GroupNorm(8, 64),
-            nn.GELU(),
-            EfficientResidualBlock1d(64)
-        )
-        
-        # High-frequency path (20-80 Hz) - preserve sharp details
-        self.high_freq_path = nn.Sequential(
-            nn.Linear(512, 128 * 40),
-            nn.Unflatten(1, (128, 40)),
-            nn.Upsample(scale_factor=4, mode='linear', align_corners=False),  # → 160
-            DepthwiseSeparableConv1d(128, 64, kernel_size=3),  # Small kernel for details
-            nn.GroupNorm(8, 64),
-            nn.GELU(),
-            EfficientResidualBlock1d(64)
-        )
-        
-        # Combine both frequency bands
-        self.combine = nn.Sequential(
-            nn.Conv1d(128, 128, 1),  # Mix low + high (64 + 64 = 128)
-            nn.GELU(),
-            EfficientChannelAttention(128, reduction=8),
-            nn.Conv1d(128, config.orig_channels, 1, groups=8)  # → 32 channels
-        )
-    
-    def forward(self, z_q):
-        """
-        Args:
-            z_q: (B, embedding_dim)
-        Returns:
-            (B, 32, 160)
-        """
-        x = self.projection(z_q)  # (B, 512)
-        
-        # Parallel frequency-specific processing
-        low = self.low_freq_path(x)   # (B, 64, 160)
-        high = self.high_freq_path(x)  # (B, 64, 160)
-        
-        # Concatenate and combine
-        combined = torch.cat([low, high], dim=1)  # (B, 128, 160)
-        return self.combine(combined)  # (B, 32, 160)
-
-
 class VQAELight(nn.Module):
+    """VQ-Autoencoder with CWT preprocessing for EEG signals."""
+    
     def __init__(self, config: VQAELightConfig | Dict):
         super().__init__()
         if isinstance(config, dict):
             config = VQAELightConfig(**config)
-        self.config = config
-        self.use_cwt = config.use_cwt
-        self.chunk_samples = config.chunk_samples
-
-        if self.use_cwt:
-            from packages.models.wavelet_head import CWTHead
-            self.cwt_head = CWTHead(
-                frequencies=config.cwt_frequencies,
-                fs=160,
-                num_channels=config.orig_channels,
-                n_cycles=5.0,
-                trainable=False,
-                chunk_samples=config.chunk_samples,
-                use_log_compression=config.use_log_compression,
-                normalize_outputs=config.normalize_outputs,
-                learnable_norm=config.learnable_norm
-            )
         
+        self.config = config
+        
+        # CWT head
+        from packages.models.wavelet_head import CWTHead
+        self.cwt_head = CWTHead(
+            frequencies=config.cwt_frequencies,
+            fs=160,
+            num_channels=config.orig_channels,
+            n_cycles=5.0,
+            trainable=False,
+            chunk_samples=config.chunk_samples,
+            use_log_compression=config.use_log_compression,
+            normalize_outputs=config.normalize_outputs,
+            learnable_norm=config.learnable_norm
+        )
+        
+        # Encoder
         self.encoder_2d = Encoder2DStageLight(config)
         enc3d_in = self.encoder_2d.out_channels * self.encoder_2d.freq_out
         self.encoder_3d = Encoder3DStageLight(
             config, channels_in=enc3d_in, time_in=self.encoder_2d.time_out
         )
         
+        # Vector quantizer
         self.vq = VectorQuantizerLight(
             config.codebook_size,
             config.embedding_dim,
@@ -604,7 +540,10 @@ class VQAELight(nn.Module):
             config.epsilon
         )
         
+        # Decoder
         self.decoder = SOTATimeFrequencyDecoder(config)
+        
+        # Initialize weights
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -624,8 +563,10 @@ class VQAELight(nn.Module):
 
     def encode(self, x):
         """
-        x: (B_chunk, 2, F, 7, 5, T_chunk)
-        returns: (B_chunk, embedding_dim)
+        Args:
+            x: (B_chunk, 2, F, 7, 5, T_chunk) - CWT output
+        Returns:
+            (B_chunk, embedding_dim)
         """
         Bc, Ch, F, R, C, T = x.shape
         x = x.permute(0, 3, 4, 1, 2, 5).reshape(Bc * R * C, Ch, F, T)
@@ -639,23 +580,30 @@ class VQAELight(nn.Module):
 
     def decode(self, z_q):
         """
-        z_q: (B_chunk, embedding_dim)
-        returns: (B_chunk, 32, 160)
+        Args:
+            z_q: (B_chunk, embedding_dim)
+        Returns:
+            (B_chunk, 32, 160)
         """
         return self.decoder(z_q)
 
     def forward(self, x):
         """
-        x: (B, 32, 640) raw EEG
+        Args:
+            x: (B, 32, 640) - raw EEG
 
-        returns:
-            'reconstruction': (B, 32, 640)
-            'target': (B, 32, 640)
+        Returns:
+            dict with keys:
+                'reconstruction': (B, 32, 640)
+                'embeddings': (B_chunk, embedding_dim)
+                'quantized': (B_chunk, embedding_dim)
+                'indices': (B_chunk,)
+                'vq_loss': scalar
+                'perplexity': scalar
+                'codebook_usage': scalar
         """
-        if self.use_cwt:
-            x_cwt = self.cwt_head(x)   # expects chunked CWT output
-        else:
-            raise ValueError("This version assumes use_cwt=True")
+        # CWT transform
+        x_cwt = self.cwt_head(x)  # (B_chunk, 2, F, 7, 5, T_chunk)
 
         # Encode
         z_e = self.encode(x_cwt)
@@ -675,29 +623,33 @@ class VQAELight(nn.Module):
         # Decode chunk-level EEG
         recon_chunk = self.decode(z_q)  # (B_chunk, 32, 160)
 
-        # Unchunk back to full (B, 32, 640)
-        if self.use_cwt and self.chunk_samples is not None:
-            recon = self.cwt_head._unchunk(recon_chunk)
-        else:
-            recon = recon_chunk
+        # Unchunk back to full sequence
+        recon = self.cwt_head._unchunk(recon_chunk)  # (B, 32, 640)
+
+        cwt_rec = self.cwt_head(recon)
 
         return {
-            'reconstruction': recon,
+            'reconstruction': cwt_rec,
             'embeddings': z_e,
             'quantized': z_q,
             'indices': indices,
-            **vq_losses
+            **vq_losses,
+            'target': x_cwt
         }
+
 
 if __name__ == "__main__":
     cfg = VQAELightConfig(
-        use_cwt=True,
+        use_quantizer=False,
         embedding_dim=64
     )
     model = VQAELight(cfg)
     x = torch.randn(2, 32, 640)
+    
     with torch.no_grad():
         out = model(x)
+    
     print("Input:", x.shape)
     print("Reconstruction:", out['reconstruction'].shape)
-    print("model parameters:", sum(p.numel() for p in model.parameters() if p.requires_grad))
+    print("Target:", out['target'].shape)
+    print("Model parameters:", sum(p.numel() for p in model.parameters() if p.requires_grad))

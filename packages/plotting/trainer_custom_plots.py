@@ -301,6 +301,8 @@ def plot_raweeg_fft_reconstruction(
     print(f"  Overall R²:   {val_overall_r2:.4f}")
     print("="*60 + "\n")
 
+
+
 def plot_reconstruction_scatter_analysis(
     trainer: "Trainer",
     max_samples_per_plot: int = 10000  # Subsample for faster plotting
@@ -328,42 +330,14 @@ def plot_reconstruction_scatter_analysis(
         train_output = model(train_input)
         val_output = model(val_input)
     
-    # Extract reconstructions and targets - KEEP AS TENSORS FIRST
-    train_recon_tensor = train_output['reconstruction']  # (B, 1750, 640)
-    train_target_tensor = train_output['target']         # (B, 1750, 640)
-    val_recon_tensor = val_output['reconstruction']
-    val_target_tensor = val_output['target']
+    # Extract reconstructions and targets
+    train_recon_struct = train_output['reconstruction'].cpu().numpy()[0]  # (1750, 640)
+    train_target_struct = train_output['target'].cpu().numpy()[0]  # (1750, 640)
+    val_recon_struct = val_output['reconstruction'].cpu().numpy()[0]
+    val_target_struct = val_output['target'].cpu().numpy()[0]
     
-    print(f"Train reconstruction shape (tensor): {train_recon_tensor.shape}")
-    print(f"Train target shape (tensor): {train_target_tensor.shape}")
-    
-    # Reshape BEFORE converting to numpy to preserve tensor operations
-    B_train = train_recon_tensor.shape[0]
-    B_val = val_recon_tensor.shape[0]
-    
-    # Reshape: (B, 1750, 640) -> (B, 2, 25, 7, 5, 640)
-    # Order: channels (mag/phase), frequency, rows, cols, time
-    train_recon_struct_tensor = train_recon_tensor.view(B_train, 2, 25, 7, 5, 640)
-    train_target_struct_tensor = train_target_tensor.view(B_train, 2, 25, 7, 5, 640)
-    val_recon_struct_tensor = val_recon_tensor.view(B_val, 2, 25, 7, 5, 640)
-    val_target_struct_tensor = val_target_tensor.view(B_val, 2, 25, 7, 5, 640)
-    
-    # Now convert to numpy and extract first sample
-    train_recon_struct = train_recon_struct_tensor[0].cpu().numpy()  # (2, 25, 7, 5, 640)
-    train_target_struct = train_target_struct_tensor[0].cpu().numpy()
-    val_recon_struct = val_recon_struct_tensor[0].cpu().numpy()
-    val_target_struct = val_target_struct_tensor[0].cpu().numpy()
-    
-    print(f"\\nReshaped structure: {train_recon_struct.shape}")
-    print(f"  Dimension 0 (mag/phase): {train_recon_struct.shape[0]}")
-    print(f"  Dimension 1 (frequency): {train_recon_struct.shape[1]}")
-    print(f"  Dimension 2 (rows):      {train_recon_struct.shape[2]}")
-    print(f"  Dimension 3 (cols):      {train_recon_struct.shape[3]}")
-    print(f"  Dimension 4 (time):      {train_recon_struct.shape[4]}")
-    
-    # Verify separation
-    print(f"\\nMagnitude range: [{train_recon_struct[0].min():.4f}, {train_recon_struct[0].max():.4f}]")
-    print(f"Phase range:     [{train_recon_struct[1].min():.4f}, {train_recon_struct[1].max():.4f}]")
+    print(f"Train reconstruction shape: {train_recon_struct.shape}")
+    print(f"Train target shape: {train_target_struct.shape}")
     
     # ========================================================================
     # 1. SCATTER PLOTS: SEPARATE FOR MAGNITUDE AND PHASE
@@ -371,7 +345,6 @@ def plot_reconstruction_scatter_analysis(
     fig, axes = plt.subplots(2, 2, figsize=(14, 12))
     
     # Extract magnitude and phase separately
-    # Index 0 = Magnitude, Index 1 = Phase
     train_mag_target = train_target_struct[0].flatten()  # Magnitude
     train_mag_recon = train_recon_struct[0].flatten()
     train_phase_target = train_target_struct[1].flatten()  # Phase
@@ -381,9 +354,6 @@ def plot_reconstruction_scatter_analysis(
     val_mag_recon = val_recon_struct[0].flatten()
     val_phase_target = val_target_struct[1].flatten()
     val_phase_recon = val_recon_struct[1].flatten()
-    
-    print(f"\\nMagnitude train samples: {len(train_mag_target)}")
-    print(f"Phase train samples:     {len(train_phase_target)}")
     
     # Subsample for plotting speed
     def subsample(target, recon, max_samples):
@@ -556,15 +526,9 @@ def plot_reconstruction_scatter_analysis(
     print("OVERALL RECONSTRUCTION STATISTICS")
     print("="*80)
     
-    # Flatten back for overall stats
-    train_target_flat = train_target_struct.reshape(-1, 640)
-    train_recon_flat = train_recon_struct.reshape(-1, 640)
-    val_target_flat = val_target_struct.reshape(-1, 640)
-    val_recon_flat = val_recon_struct.reshape(-1, 640)
-    
     for dataset_name, target, recon in [
-        ('TRAIN', train_target_flat, train_recon_flat),
-        ('VAL', val_target_flat, val_recon_flat)
+        ('TRAIN', train_target_struct, train_recon_struct),
+        ('VAL', val_target_struct, val_recon_struct)
     ]:
         error = recon - target
         mae = np.mean(np.abs(error))
@@ -599,9 +563,9 @@ def plot_reconstruction_scatter_analysis(
     train_freq_mae = np.mean(np.abs(train_recon_struct - train_target_struct), axis=(2, 3, 4))
     val_freq_mae = np.mean(np.abs(val_recon_struct - val_target_struct), axis=(2, 3, 4))
     
-    print(f"\\nFrequency MAE shape (train): {train_freq_mae.shape}")
-    print(f"Magnitude MAE values (first 5): {train_freq_mae[0][:5]}")
-    print(f"Phase MAE values (first 5):     {train_freq_mae[1][:5]}")
+    print(f"\\nFrequency MAE shape (train): {train_freq_mae.shape}")  # Debug
+    print(f"Magnitude MAE values: {train_freq_mae[0][:5]}")  # First 5 values
+    print(f"Phase MAE values: {train_freq_mae[1][:5]}")  # First 5 values
     
     # Plot spatial heatmaps
     im0 = axes[0, 0].imshow(train_spatial_mae, cmap='hot', aspect='auto')
@@ -620,8 +584,8 @@ def plot_reconstruction_scatter_analysis(
     freq_indices = np.arange(25)
     
     # Train frequency profile
-    axes[1, 0].plot(freq_indices, train_freq_mae[0], label='Magnitude', marker='o', linewidth=2, markersize=4)
-    axes[1, 0].plot(freq_indices, train_freq_mae[1], label='Phase', marker='s', linewidth=2, markersize=4)
+    axes[1, 0].plot(freq_indices, train_freq_mae[0], label='Magnitude', marker='o', linewidth=2)
+    axes[1, 0].plot(freq_indices, train_freq_mae[1], label='Phase', marker='s', linewidth=2)
     axes[1, 0].set_title('Train: MAE by Frequency Band')
     axes[1, 0].set_xlabel('Frequency Band Index (0-24)')
     axes[1, 0].set_ylabel('MAE')
@@ -630,8 +594,8 @@ def plot_reconstruction_scatter_analysis(
     axes[1, 0].set_xticks(np.arange(0, 25, 5))
     
     # Val frequency profile
-    axes[1, 1].plot(freq_indices, val_freq_mae[0], label='Magnitude', marker='o', linewidth=2, markersize=4)
-    axes[1, 1].plot(freq_indices, val_freq_mae[1], label='Phase', marker='s', linewidth=2, markersize=4)
+    axes[1, 1].plot(freq_indices, val_freq_mae[0], label='Magnitude', marker='o', linewidth=2)
+    axes[1, 1].plot(freq_indices, val_freq_mae[1], label='Phase', marker='s', linewidth=2)
     axes[1, 1].set_title('Val: MAE by Frequency Band')
     axes[1, 1].set_xlabel('Frequency Band Index (0-24)')
     axes[1, 1].set_ylabel('MAE')
@@ -642,3 +606,4 @@ def plot_reconstruction_scatter_analysis(
     plt.suptitle('Spatial and Frequency Error Analysis', fontsize=14, y=0.995)
     plt.tight_layout()
     plt.show()
+    

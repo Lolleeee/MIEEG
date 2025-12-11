@@ -12,18 +12,18 @@ from packages.train.trainer_config_schema import (
     CustomPlotTypes
 )
 from packages.train.training import Trainer
-from packages.models.vqae_light import VQAELightConfig
+from packages.models.vqaehyb import VQAELightConfig
 from packages.data_objects.dataset import autoencoder_unpack_func
 model_config = VQAELightConfig(
     use_quantizer=False,
-    use_cwt=True,
+    embedding_dim=128,
 )
 
     
 
 config = {
     'model': {
-        'model_type': ModelType.VQAE23_SMALL,
+        'model_type': ModelType.VQAEHYB,
         'model_kwargs': {
             'config': model_config
         }
@@ -41,8 +41,8 @@ config = {
                 'test': 0.2
             },
             'batch_size': 32,
-            'norm_axes': (0, 2),
-            'target_norm_axes': (0, 2),
+            # 'norm_axes': (0, 2),
+            # 'target_norm_axes': (0, 2),
             'nsamples': 5
         }
     },
@@ -52,7 +52,7 @@ config = {
     },
     'optimizer': {
         'type': OptimizerType.ADAMW,
-        'lr': 0.001,
+        'lr': 0.01,
         'asym_lr': None,
         'weight_decay': 0.0001
     },
@@ -82,7 +82,7 @@ config = {
         'custom_plotter': {
             'plot_function': CustomPlotTypes.SCATTER,
             'plot_function_args': {},
-            'plot_interval': 10
+            'plot_interval': 50
         }
     },
     'info': {

@@ -5,11 +5,12 @@ from torch import nn, optim, cuda
 from torch import device as torchdevice
 from typing import Optional, Literal, List, Any, Set, Union
 from packages.train.metrics import TorchMetric, RMSE, MSE, MAE, AxisCorrelation
-from packages.train.loss import TorchLoss, TorchMSELoss, TorchL1Loss, SequenceVQVAELoss, VQAE23Loss, CustomMSE
+from packages.train.loss import TorchLoss, TorchMSELoss, TorchL1Loss, SequenceVQVAELoss, VQAE23Loss, CustomMSE, CWTLoss
 from packages.models.vqae_skip import SequenceVQAE as SequenceVQAE_Skip
 from packages.models.vqae import VQVAE
 from packages.models.vqae_light_ts import VQAELight as VQAE23_LTS
 from packages.models.vqae_light import VQAELight as VQAE23_small
+from packages.models.vqaehyb import VQAELight as VQAEHYB
 from packages.models.vqae_23 import VQAE23
 from packages.models.test_models import SimpleVQVAE, SimpleAutoencoder
 from packages.data_objects.dataset import TestTorchH5Dataset, TestTorchH5DatasetContiguous, TorchDataset, TestTorchDataset, TorchH5Dataset
@@ -29,6 +30,7 @@ class ModelType(str, Enum):
     VQAE23_LTS = "vqae23_lts"
     COMVQAE23 = "com_vqae23"
     VQAE23_SMALL = "vqae23_small"
+    VQAEHYB = "vqae_hyb"
     #Test models
     SIMPLE_VQVAE = "simple_vqvae"
     SIMPLE_AE = "simple_ae"
@@ -45,6 +47,7 @@ class LossType(str, Enum):
     SEQVQVAELOSS = "seq_vqvae_loss"
     VQAE23LOSS = "vqae23_loss"
     INMODELMSE = "inmodel_mse"
+    CWTLOSS = "cwt_loss"
 
 
 class DatasetType(str, Enum):
@@ -82,6 +85,7 @@ MODEL_MAP = {
     ModelType.COMVQAE23: VQAE23,
     ModelType.VQAE23_LTS: VQAE23_LTS,
     ModelType.VQAE23_SMALL: VQAE23_small,
+    ModelType.VQAEHYB: VQAEHYB,
 }
 
 OPTIMIZER_MAP = {
@@ -94,7 +98,8 @@ LOSS_MAP = {
     LossType.L1: TorchL1Loss,
     LossType.SEQVQVAELOSS: SequenceVQVAELoss,
     LossType.VQAE23LOSS: VQAE23Loss,
-    LossType.INMODELMSE: CustomMSE
+    LossType.INMODELMSE: CustomMSE,
+    LossType.CWTLOSS: CWTLoss,
 }
 
 DATASET_MAP = {

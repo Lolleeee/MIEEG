@@ -426,3 +426,27 @@ class CustomMSE(TorchLoss):
         target = outputs['target']
         loss = self.function(rec, target)
         return {'loss': loss}
+
+
+# WARNING: DOESN?T WORK IF HEAD HAS LEARNABLE PARAMETERS
+from packages.models.wavelet_head import CWTHead
+class CWTLoss(TorchLoss):
+    def __init__(self):
+        """Continuous Wavelet Transform Loss
+        Uses CWT head to compute loss in time-frequency domain.
+        """
+        super().__init__(expected_model_output_keys=['reconstruction'], 
+                         expected_loss_keys=['loss'])
+        self.name = "CWTLoss"
+        self.function = nn.MSELoss(reduction='mean')
+        self.cwt_head = CWTHead(fs=160, frequencies=np.logspace(np.log10(0.5), np.log10(79.9), 25))
+    def _compute_loss(self, outputs: dict, batch: dict) -> dict:
+        rec = outputs['reconstruction']
+        target = batch['target']
+        
+        rec_cwt = self.cwt_head(rec)
+        target_cwt = self.cwt_head(target)
+        
+        loss = self.function(rec_cwt, target_cwt)
+
+        return {'loss': loss}
