@@ -5,7 +5,7 @@ from torch import nn, optim, cuda
 from torch import device as torchdevice
 from typing import Optional, Literal, List, Any, Set, Union
 from packages.train.metrics import TorchMetric, RMSE, MSE, MAE, AxisCorrelation
-from packages.train.loss import TorchLoss, TorchMSELoss, TorchL1Loss, SequenceVQVAELoss, VQAE23Loss, CustomMSE, CWTLoss
+from packages.train.loss import TorchLoss, TorchMSELoss, TorchL1Loss, SequenceVQVAELoss, VQAE23Loss, CWTMSE, CWTLoss
 from packages.models.vqae_skip import SequenceVQAE as SequenceVQAE_Skip
 from packages.models.vqae import VQVAE
 from packages.models.vqae_light_ts import VQAELight as VQAE23_LTS
@@ -98,7 +98,7 @@ LOSS_MAP = {
     LossType.L1: TorchL1Loss,
     LossType.SEQVQVAELOSS: SequenceVQVAELoss,
     LossType.VQAE23LOSS: VQAE23Loss,
-    LossType.INMODELMSE: CustomMSE,
+    LossType.INMODELMSE: CWTMSE,
     LossType.CWTLOSS: CWTLoss,
 }
 

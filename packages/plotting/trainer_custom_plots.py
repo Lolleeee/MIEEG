@@ -330,30 +330,72 @@ def plot_reconstruction_scatter_analysis(
         train_output = model(train_input)
         val_output = model(val_input)
     
-    # Extract reconstructions and targets
-    train_recon_struct = train_output['reconstruction'].cpu().numpy()[0]  # (1750, 640)
-    train_target_struct = train_output['target'].cpu().numpy()[0]  # (1750, 640)
+    # Extract reconstructions and targets (raw signals)
+    train_recon_struct = train_output['reconstruction'].cpu().numpy()[0]  # (32, 640)
+    train_target_struct = train_batch['target'].cpu().numpy()[0]  # Fixed: use train_batch
     val_recon_struct = val_output['reconstruction'].cpu().numpy()[0]
-    val_target_struct = val_output['target'].cpu().numpy()[0]
+    val_target_struct = val_batch['target'].cpu().numpy()[0]
     
     print(f"Train reconstruction shape: {train_recon_struct.shape}")
     print(f"Train target shape: {train_target_struct.shape}")
+    print(f"Val reconstruction shape: {val_recon_struct.shape}")
+    print(f"Val target shape: {val_target_struct.shape}")
     
     # ========================================================================
-    # 1. SCATTER PLOTS: SEPARATE FOR MAGNITUDE AND PHASE
+    # COMPUTE CWT REPRESENTATIONS
+    # ========================================================================
+    print("\n" + "="*80)
+    print("COMPUTING CWT REPRESENTATIONS")
+    print("="*80)
+    
+    def compute_cwt(data, model):
+        """Convert raw EEG to CWT space"""
+        data_tensor = torch.tensor(data, dtype=torch.float32).unsqueeze(0).to(trainer.device)  # (1, 32, 640)
+        with torch.no_grad():
+            cwt_output = model.cwt_head(data_tensor)  # (B_chunk, 2, 25, 7, 5, 160)
+        # Average over chunks to get single representation
+        cwt_avg = cwt_output.mean(dim=0).cpu().numpy()  # (2, 25, 7, 5, 160)
+        return cwt_avg
+    
+    train_recon_cwt = compute_cwt(train_recon_struct, model)
+    train_target_cwt = compute_cwt(train_target_struct, model)
+    val_recon_cwt = compute_cwt(val_recon_struct, model)
+    val_target_cwt = compute_cwt(val_target_struct, model)
+    
+    print(f"\nTrain reconstruction CWT shape: {train_recon_cwt.shape}")
+    print(f"Train target CWT shape: {train_target_cwt.shape}")
+    print(f"Val reconstruction CWT shape: {val_recon_cwt.shape}")
+    print(f"Val target CWT shape: {val_target_cwt.shape}")
+    
+    print(f"\nCWT Dimension breakdown:")
+    print(f"  Dim 0 (mag/phase): {train_recon_cwt.shape[0]}")
+    print(f"  Dim 1 (frequency): {train_recon_cwt.shape[1]}")
+    print(f"  Dim 2 (rows):      {train_recon_cwt.shape[2]}")
+    print(f"  Dim 3 (cols):      {train_recon_cwt.shape[3]}")
+    print(f"  Dim 4 (time):      {train_recon_cwt.shape[4]}")
+    
+    # Verify separation
+    print(f"\nMagnitude range (train): [{train_recon_cwt[0].min():.4f}, {train_recon_cwt[0].max():.4f}]")
+    print(f"Phase range (train):     [{train_recon_cwt[1].min():.4f}, {train_recon_cwt[1].max():.4f}]")
+    
+    # ========================================================================
+    # 1. SCATTER PLOTS: MAGNITUDE VS PHASE
     # ========================================================================
     fig, axes = plt.subplots(2, 2, figsize=(14, 12))
     
     # Extract magnitude and phase separately
-    train_mag_target = train_target_struct[0].flatten()  # Magnitude
-    train_mag_recon = train_recon_struct[0].flatten()
-    train_phase_target = train_target_struct[1].flatten()  # Phase
-    train_phase_recon = train_recon_struct[1].flatten()
+    train_mag_target = train_target_cwt[0].flatten()    # Magnitude
+    train_mag_recon = train_recon_cwt[0].flatten()
+    train_phase_target = train_target_cwt[1].flatten()  # Phase
+    train_phase_recon = train_recon_cwt[1].flatten()
     
-    val_mag_target = val_target_struct[0].flatten()
-    val_mag_recon = val_recon_struct[0].flatten()
-    val_phase_target = val_target_struct[1].flatten()
-    val_phase_recon = val_recon_struct[1].flatten()
+    val_mag_target = val_target_cwt[0].flatten()
+    val_mag_recon = val_recon_cwt[0].flatten()
+    val_phase_target = val_target_cwt[1].flatten()
+    val_phase_recon = val_recon_cwt[1].flatten()
+    
+    print(f"\nMagnitude samples: {len(train_mag_target)}")
+    print(f"Phase samples:     {len(train_phase_target)}")
     
     # Subsample for plotting speed
     def subsample(target, recon, max_samples):
@@ -368,83 +410,78 @@ def plot_reconstruction_scatter_analysis(
     val_phase_target_sub, val_phase_recon_sub = subsample(val_phase_target, val_phase_recon, max_samples_per_plot)
     
     # Top row: Magnitude
-    # Train Magnitude
     axes[0, 0].scatter(train_mag_target_sub, train_mag_recon_sub, alpha=0.3, s=1, color='blue')
     lim_min = min(train_mag_target_sub.min(), train_mag_recon_sub.min())
     lim_max = max(train_mag_target_sub.max(), train_mag_recon_sub.max())
     axes[0, 0].plot([lim_min, lim_max], [lim_min, lim_max], 'r--', linewidth=2, label='Perfect')
     axes[0, 0].set_xlabel('Target Magnitude')
     axes[0, 0].set_ylabel('Reconstructed Magnitude')
-    axes[0, 0].set_title('Train: Magnitude Reconstruction')
+    axes[0, 0].set_title('Train: Magnitude Reconstruction (CWT)')
     axes[0, 0].legend()
     axes[0, 0].grid(True, alpha=0.3)
     
-    # Val Magnitude
     axes[0, 1].scatter(val_mag_target_sub, val_mag_recon_sub, alpha=0.3, s=1, color='blue')
     lim_min = min(val_mag_target_sub.min(), val_mag_recon_sub.min())
     lim_max = max(val_mag_target_sub.max(), val_mag_recon_sub.max())
     axes[0, 1].plot([lim_min, lim_max], [lim_min, lim_max], 'r--', linewidth=2, label='Perfect')
     axes[0, 1].set_xlabel('Target Magnitude')
     axes[0, 1].set_ylabel('Reconstructed Magnitude')
-    axes[0, 1].set_title('Val: Magnitude Reconstruction')
+    axes[0, 1].set_title('Val: Magnitude Reconstruction (CWT)')
     axes[0, 1].legend()
     axes[0, 1].grid(True, alpha=0.3)
     
     # Bottom row: Phase
-    # Train Phase
     axes[1, 0].scatter(train_phase_target_sub, train_phase_recon_sub, alpha=0.3, s=1, color='green')
     lim_min = min(train_phase_target_sub.min(), train_phase_recon_sub.min())
     lim_max = max(train_phase_target_sub.max(), train_phase_recon_sub.max())
     axes[1, 0].plot([lim_min, lim_max], [lim_min, lim_max], 'r--', linewidth=2, label='Perfect')
     axes[1, 0].set_xlabel('Target Phase')
     axes[1, 0].set_ylabel('Reconstructed Phase')
-    axes[1, 0].set_title('Train: Phase Reconstruction')
+    axes[1, 0].set_title('Train: Phase Reconstruction (CWT)')
     axes[1, 0].legend()
     axes[1, 0].grid(True, alpha=0.3)
     
-    # Val Phase
     axes[1, 1].scatter(val_phase_target_sub, val_phase_recon_sub, alpha=0.3, s=1, color='green')
     lim_min = min(val_phase_target_sub.min(), val_phase_recon_sub.min())
     lim_max = max(val_phase_target_sub.max(), val_phase_recon_sub.max())
     axes[1, 1].plot([lim_min, lim_max], [lim_min, lim_max], 'r--', linewidth=2, label='Perfect')
     axes[1, 1].set_xlabel('Target Phase')
     axes[1, 1].set_ylabel('Reconstructed Phase')
-    axes[1, 1].set_title('Val: Phase Reconstruction')
+    axes[1, 1].set_title('Val: Phase Reconstruction (CWT)')
     axes[1, 1].legend()
     axes[1, 1].grid(True, alpha=0.3)
     
-    plt.suptitle('Magnitude and Phase Reconstruction Scatter Analysis', fontsize=14, y=0.995)
+    plt.suptitle('CWT Space: Magnitude and Phase Reconstruction', fontsize=14, y=0.995)
     plt.tight_layout()
     plt.show()
     
     # ========================================================================
     # 2. ERROR ANALYSIS BY MAGNITUDE/PHASE
     # ========================================================================
-    print("\\n" + "="*80)
-    print("ERROR ANALYSIS BY MAGNITUDE/PHASE")
+    print("\n" + "="*80)
+    print("CWT ERROR ANALYSIS BY MAGNITUDE/PHASE")
     print("="*80)
     
     channel_names = ['Magnitude', 'Phase']
     
-    for dataset_name, target_struct, recon_struct in [
-        ('TRAIN', train_target_struct, train_recon_struct),
-        ('VAL', val_target_struct, val_recon_struct)
+    for dataset_name, target_cwt, recon_cwt in [
+        ('TRAIN', train_target_cwt, train_recon_cwt),
+        ('VAL', val_target_cwt, val_recon_cwt)
     ]:
-        print(f"\\n{dataset_name} SET:")
+        print(f"\n{dataset_name} SET:")
         print("-" * 80)
         print(f"{'Channel':<15} {'MAE':<12} {'MSE':<12} {'RMSE':<12} {'R²':<12}")
         print("-" * 80)
         
         for ch_idx, ch_name in enumerate(channel_names):
-            ch_target = target_struct[ch_idx].flatten()
-            ch_recon = recon_struct[ch_idx].flatten()
+            ch_target = target_cwt[ch_idx].flatten()
+            ch_recon = recon_cwt[ch_idx].flatten()
             
             error = ch_recon - ch_target
             mae = np.mean(np.abs(error))
             mse = np.mean(error ** 2)
             rmse = np.sqrt(mse)
             
-            # R² score
             ss_res = np.sum((ch_target - ch_recon) ** 2)
             ss_tot = np.sum((ch_target - np.mean(ch_target)) ** 2)
             r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
@@ -454,26 +491,25 @@ def plot_reconstruction_scatter_analysis(
     # ========================================================================
     # 3. ERROR ANALYSIS BY FREQUENCY BAND
     # ========================================================================
-    print("\\n" + "="*80)
-    print("ERROR ANALYSIS BY FREQUENCY BAND (25 bands)")
+    print("\n" + "="*80)
+    print("CWT ERROR ANALYSIS BY FREQUENCY BAND (25 bands)")
     print("="*80)
     
-    # Get actual frequency values from config
     frequencies = np.logspace(np.log10(0.5), np.log10(79.9), 25)
     
-    for dataset_name, target_struct, recon_struct in [
-        ('TRAIN', train_target_struct, train_recon_struct),
-        ('VAL', val_target_struct, val_recon_struct)
+    for dataset_name, target_cwt, recon_cwt in [
+        ('TRAIN', train_target_cwt, train_recon_cwt),
+        ('VAL', val_target_cwt, val_recon_cwt)
     ]:
-        print(f"\\n{dataset_name} SET:")
+        print(f"\n{dataset_name} SET:")
         print("-" * 80)
         print(f"{'Freq Band':<12} {'Freq (Hz)':<12} {'MAE':<12} {'MSE':<12} {'RMSE':<12} {'R²':<12}")
         print("-" * 80)
         
         for freq_idx in range(25):
-            # Average over magnitude/phase for this frequency
-            freq_target = target_struct[:, freq_idx].flatten()
-            freq_recon = recon_struct[:, freq_idx].flatten()
+            # Get this frequency band across both magnitude and phase
+            freq_target = target_cwt[:, freq_idx].flatten()  # (2, 7, 5, 160) -> flat
+            freq_recon = recon_cwt[:, freq_idx].flatten()
             
             error = freq_recon - freq_target
             mae = np.mean(np.abs(error))
@@ -487,26 +523,26 @@ def plot_reconstruction_scatter_analysis(
             print(f"Band {freq_idx:<6} {frequencies[freq_idx]:<12.2f} {mae:<12.6f} {mse:<12.6f} {rmse:<12.6f} {r2:<12.6f}")
     
     # ========================================================================
-    # 4. ERROR ANALYSIS BY SPATIAL LOCATION (7x5 grid)
+    # 4. ERROR ANALYSIS BY SPATIAL LOCATION (7×5 grid)
     # ========================================================================
-    print("\\n" + "="*80)
-    print("ERROR ANALYSIS BY SPATIAL LOCATION (7 rows × 5 cols)")
+    print("\n" + "="*80)
+    print("CWT ERROR ANALYSIS BY SPATIAL LOCATION (7 rows × 5 cols)")
     print("="*80)
     
-    for dataset_name, target_struct, recon_struct in [
-        ('TRAIN', train_target_struct, train_recon_struct),
-        ('VAL', val_target_struct, val_recon_struct)
+    for dataset_name, target_cwt, recon_cwt in [
+        ('TRAIN', train_target_cwt, train_recon_cwt),
+        ('VAL', val_target_cwt, val_recon_cwt)
     ]:
-        print(f"\\n{dataset_name} SET:")
+        print(f"\n{dataset_name} SET:")
         print("-" * 80)
         print(f"{'Location':<12} {'MAE':<12} {'MSE':<12} {'RMSE':<12} {'R²':<12}")
         print("-" * 80)
         
         for row in range(7):
             for col in range(5):
-                # Average over magnitude/phase and frequencies for this location
-                loc_target = target_struct[:, :, row, col].flatten()
-                loc_recon = recon_struct[:, :, row, col].flatten()
+                # Get this spatial location across mag/phase, all frequencies, all time
+                loc_target = target_cwt[:, :, row, col].flatten()  # (2, 25, 160) -> flat
+                loc_recon = recon_cwt[:, :, row, col].flatten()
                 
                 error = loc_recon - loc_target
                 mae = np.mean(np.abs(error))
@@ -520,15 +556,52 @@ def plot_reconstruction_scatter_analysis(
                 print(f"({row},{col}){'':<6} {mae:<12.6f} {mse:<12.6f} {rmse:<12.6f} {r2:<12.6f}")
     
     # ========================================================================
-    # 5. OVERALL STATISTICS
+    # 5. ERROR ANALYSIS BY FREQUENCY × MAGNITUDE/PHASE
     # ========================================================================
-    print("\\n" + "="*80)
-    print("OVERALL RECONSTRUCTION STATISTICS")
+    print("\n" + "="*80)
+    print("CWT ERROR ANALYSIS BY FREQUENCY AND MAG/PHASE")
+    print("="*80)
+    
+    for dataset_name, target_cwt, recon_cwt in [
+        ('TRAIN', train_target_cwt, train_recon_cwt),
+        ('VAL', val_target_cwt, val_recon_cwt)
+    ]:
+        print(f"\n{dataset_name} SET:")
+        print("-" * 80)
+        print(f"{'Freq Band':<12} {'Freq (Hz)':<12} {'Mag MAE':<12} {'Phase MAE':<12} {'Mag R²':<12} {'Phase R²':<12}")
+        print("-" * 80)
+        
+        for freq_idx in range(25):
+            # Magnitude at this frequency
+            mag_target = target_cwt[0, freq_idx].flatten()
+            mag_recon = recon_cwt[0, freq_idx].flatten()
+            mag_mae = np.mean(np.abs(mag_recon - mag_target))
+            
+            ss_res_mag = np.sum((mag_target - mag_recon) ** 2)
+            ss_tot_mag = np.sum((mag_target - np.mean(mag_target)) ** 2)
+            mag_r2 = 1 - (ss_res_mag / ss_tot_mag) if ss_tot_mag > 0 else 0
+            
+            # Phase at this frequency
+            phase_target = target_cwt[1, freq_idx].flatten()
+            phase_recon = recon_cwt[1, freq_idx].flatten()
+            phase_mae = np.mean(np.abs(phase_recon - phase_target))
+            
+            ss_res_phase = np.sum((phase_target - phase_recon) ** 2)
+            ss_tot_phase = np.sum((phase_target - np.mean(phase_target)) ** 2)
+            phase_r2 = 1 - (ss_res_phase / ss_tot_phase) if ss_tot_phase > 0 else 0
+            
+            print(f"Band {freq_idx:<6} {frequencies[freq_idx]:<12.2f} {mag_mae:<12.6f} {phase_mae:<12.6f} {mag_r2:<12.6f} {phase_r2:<12.6f}")
+    
+    # ========================================================================
+    # 6. OVERALL STATISTICS
+    # ========================================================================
+    print("\n" + "="*80)
+    print("OVERALL CWT RECONSTRUCTION STATISTICS")
     print("="*80)
     
     for dataset_name, target, recon in [
-        ('TRAIN', train_target_struct, train_recon_struct),
-        ('VAL', val_target_struct, val_recon_struct)
+        ('TRAIN', train_target_cwt, train_recon_cwt),
+        ('VAL', val_target_cwt, val_recon_cwt)
     ]:
         error = recon - target
         mae = np.mean(np.abs(error))
@@ -539,7 +612,7 @@ def plot_reconstruction_scatter_analysis(
         ss_tot = np.sum((target - np.mean(target)) ** 2)
         r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
         
-        print(f"\\n{dataset_name} SET:")
+        print(f"\n{dataset_name} SET:")
         print(f"  MAE:  {mae:.6f}")
         print(f"  MSE:  {mse:.6f}")
         print(f"  RMSE: {rmse:.6f}")
@@ -547,25 +620,20 @@ def plot_reconstruction_scatter_analysis(
         print(f"  Target range:  [{target.min():.4f}, {target.max():.4f}]")
         print(f"  Recon range:   [{recon.min():.4f}, {recon.max():.4f}]")
     
-    print("="*80 + "\\n")
+    print("="*80 + "\n")
     
     # ========================================================================
-    # 6. VISUALIZATION: ERROR HEATMAPS AND FREQUENCY PROFILES
+    # 7. VISUALIZATION: ERROR HEATMAPS AND FREQUENCY PROFILES
     # ========================================================================
     fig, axes = plt.subplots(2, 2, figsize=(14, 12))
     
-    # Calculate spatial error maps (averaged over magnitude/phase, time, and frequency)
-    train_spatial_mae = np.mean(np.abs(train_recon_struct - train_target_struct), axis=(0, 1, 4))
-    val_spatial_mae = np.mean(np.abs(val_recon_struct - val_target_struct), axis=(0, 1, 4))
+    # Spatial error maps (averaged over mag/phase, frequency, and time)
+    train_spatial_mae = np.mean(np.abs(train_recon_cwt - train_target_cwt), axis=(0, 1, 4))  # (7, 5)
+    val_spatial_mae = np.mean(np.abs(val_recon_cwt - val_target_cwt), axis=(0, 1, 4))
     
-    # Calculate frequency error profiles (averaged over space and time)
-    # Shape after mean: (2, 25) where dim 0 is mag/phase, dim 1 is frequency
-    train_freq_mae = np.mean(np.abs(train_recon_struct - train_target_struct), axis=(2, 3, 4))
-    val_freq_mae = np.mean(np.abs(val_recon_struct - val_target_struct), axis=(2, 3, 4))
-    
-    print(f"\\nFrequency MAE shape (train): {train_freq_mae.shape}")  # Debug
-    print(f"Magnitude MAE values: {train_freq_mae[0][:5]}")  # First 5 values
-    print(f"Phase MAE values: {train_freq_mae[1][:5]}")  # First 5 values
+    # Frequency error profiles (averaged over space and time)
+    train_freq_mae = np.mean(np.abs(train_recon_cwt - train_target_cwt), axis=(2, 3, 4))  # (2, 25)
+    val_freq_mae = np.mean(np.abs(val_recon_cwt - val_target_cwt), axis=(2, 3, 4))
     
     # Plot spatial heatmaps
     im0 = axes[0, 0].imshow(train_spatial_mae, cmap='hot', aspect='auto')
@@ -580,12 +648,11 @@ def plot_reconstruction_scatter_analysis(
     axes[0, 1].set_ylabel('Row')
     plt.colorbar(im1, ax=axes[0, 1])
     
-    # Plot frequency profiles with proper x-axis
+    # Plot frequency profiles
     freq_indices = np.arange(25)
     
-    # Train frequency profile
-    axes[1, 0].plot(freq_indices, train_freq_mae[0], label='Magnitude', marker='o', linewidth=2)
-    axes[1, 0].plot(freq_indices, train_freq_mae[1], label='Phase', marker='s', linewidth=2)
+    axes[1, 0].plot(freq_indices, train_freq_mae[0], label='Magnitude', marker='o', linewidth=2, markersize=4)
+    axes[1, 0].plot(freq_indices, train_freq_mae[1], label='Phase', marker='s', linewidth=2, markersize=4)
     axes[1, 0].set_title('Train: MAE by Frequency Band')
     axes[1, 0].set_xlabel('Frequency Band Index (0-24)')
     axes[1, 0].set_ylabel('MAE')
@@ -593,9 +660,8 @@ def plot_reconstruction_scatter_analysis(
     axes[1, 0].grid(True, alpha=0.3)
     axes[1, 0].set_xticks(np.arange(0, 25, 5))
     
-    # Val frequency profile
-    axes[1, 1].plot(freq_indices, val_freq_mae[0], label='Magnitude', marker='o', linewidth=2)
-    axes[1, 1].plot(freq_indices, val_freq_mae[1], label='Phase', marker='s', linewidth=2)
+    axes[1, 1].plot(freq_indices, val_freq_mae[0], label='Magnitude', marker='o', linewidth=2, markersize=4)
+    axes[1, 1].plot(freq_indices, val_freq_mae[1], label='Phase', marker='s', linewidth=2, markersize=4)
     axes[1, 1].set_title('Val: MAE by Frequency Band')
     axes[1, 1].set_xlabel('Frequency Band Index (0-24)')
     axes[1, 1].set_ylabel('MAE')
@@ -603,7 +669,60 @@ def plot_reconstruction_scatter_analysis(
     axes[1, 1].grid(True, alpha=0.3)
     axes[1, 1].set_xticks(np.arange(0, 25, 5))
     
-    plt.suptitle('Spatial and Frequency Error Analysis', fontsize=14, y=0.995)
+    plt.suptitle('CWT Space: Spatial and Frequency Error Analysis', fontsize=14, y=0.995)
     plt.tight_layout()
     plt.show()
     
+    # ========================================================================
+    # 8. TIME SERIES VISUALIZATION (RAW SIGNALS)
+    # ========================================================================
+    print("\n" + "="*80)
+    print("RAW SIGNAL TIME SERIES VISUALIZATION")
+    print("="*80)
+    
+    sample_channels = [5, 15, 25]
+    channel_names_display = [f'Channel {ch}' for ch in sample_channels]
+    
+    fig, axes = plt.subplots(3, 2, figsize=(16, 10))
+    time_axis = np.arange(640) / 160
+    
+    for idx, (ch_idx, ch_name) in enumerate(zip(sample_channels, channel_names_display)):
+        # Train
+        ax_train = axes[idx, 0]
+        ax_train.plot(time_axis, train_target_struct[ch_idx], 'b-', label='Target', alpha=0.7, linewidth=1.5)
+        ax_train.plot(time_axis, train_recon_struct[ch_idx], 'r--', label='Reconstruction', alpha=0.7, linewidth=1.5)
+        ax_train.set_ylabel(f'{ch_name}\nAmplitude', fontsize=10)
+        ax_train.legend(loc='upper right', fontsize=9)
+        ax_train.grid(True, alpha=0.3)
+        
+        if idx == 0:
+            ax_train.set_title('Train Set', fontsize=12, fontweight='bold')
+        if idx == 2:
+            ax_train.set_xlabel('Time (seconds)', fontsize=10)
+        
+        corr_train = np.corrcoef(train_target_struct[ch_idx], train_recon_struct[ch_idx])[0, 1]
+        ax_train.text(0.02, 0.95, f'r = {corr_train:.3f}', 
+                     transform=ax_train.transAxes, verticalalignment='top',
+                     bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        
+        # Val
+        ax_val = axes[idx, 1]
+        ax_val.plot(time_axis, val_target_struct[ch_idx], 'b-', label='Target', alpha=0.7, linewidth=1.5)
+        ax_val.plot(time_axis, val_recon_struct[ch_idx], 'r--', label='Reconstruction', alpha=0.7, linewidth=1.5)
+        ax_val.set_ylabel(f'{ch_name}\nAmplitude', fontsize=10)
+        ax_val.legend(loc='upper right', fontsize=9)
+        ax_val.grid(True, alpha=0.3)
+        
+        if idx == 0:
+            ax_val.set_title('Validation Set', fontsize=12, fontweight='bold')
+        if idx == 2:
+            ax_val.set_xlabel('Time (seconds)', fontsize=10)
+        
+        corr_val = np.corrcoef(val_target_struct[ch_idx], val_recon_struct[ch_idx])[0, 1]
+        ax_val.text(0.02, 0.95, f'r = {corr_val:.3f}', 
+                   transform=ax_val.transAxes, verticalalignment='top',
+                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    plt.suptitle('Raw Signal: Time Series Reconstruction', fontsize=14, y=0.995)
+    plt.tight_layout()
+    plt.show()

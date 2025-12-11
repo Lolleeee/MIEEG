@@ -634,7 +634,8 @@ class VQAELight(nn.Module):
             'quantized': z_q,
             'indices': indices,
             **vq_losses,
-            'target': x_cwt
+            'target': x_cwt,
+            'time_rec': recon
         }
 
 
