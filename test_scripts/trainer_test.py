@@ -61,7 +61,7 @@ config = {
         'use_amp': False
     },
     'train_loop': {
-        'epochs': 100,
+        'epochs': 200,
         'runtime_validation': False
     },
     'helpers': {
@@ -80,9 +80,9 @@ config = {
         'reduce_lr_on_plateau': None,
         'gradient_logger': None, #{'interval': 1}
         'custom_plotter': {
-            'plot_function': CustomPlotTypes.RECONSTRUCTIONS,
+            'plot_function': CustomPlotTypes.SCATTER,
             'plot_function_args': {},
-            'plot_interval': 1000
+            'plot_interval': 10
         }
     },
     'info': {

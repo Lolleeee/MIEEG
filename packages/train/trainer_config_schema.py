@@ -16,13 +16,14 @@ from packages.data_objects.dataset import TestTorchH5Dataset, TestTorchH5Dataset
 from enum import Enum
 import json
 from pprint import pprint
-from packages.plotting.trainer_custom_plots import plot_raweeg_fft_reconstruction, plot_raweeg_reconstruction 
+from packages.plotting.trainer_custom_plots import plot_raweeg_fft_reconstruction, plot_raweeg_reconstruction, plot_reconstruction_scatter_analysis, plot_reconstruction_scatter_analysis 
 
 
 # ===== String-based Enums =====
 class CustomPlotTypes(str, Enum):
     RECONSTRUCTIONS = "reconstructions"
     RECONSTRUCTIONS_FREQ = "reconstructions_freq"
+    SCATTER = "scatter"
 
 class ModelType(str, Enum):
     VQAE23_LTS = "vqae23_lts"
@@ -74,6 +75,7 @@ class AugmentationType(str, Enum):
 CUSTOM_PLOTS_MAP = {
     CustomPlotTypes.RECONSTRUCTIONS: plot_raweeg_reconstruction,
     CustomPlotTypes.RECONSTRUCTIONS_FREQ: plot_raweeg_fft_reconstruction,
+    CustomPlotTypes.SCATTER: plot_reconstruction_scatter_analysis,
 }
 MODEL_MAP = {
     ModelType.SIMPLE_VQVAE: SimpleVQVAE,
