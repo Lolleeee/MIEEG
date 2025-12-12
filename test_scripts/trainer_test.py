@@ -12,7 +12,7 @@ from packages.train.trainer_config_schema import (
     CustomPlotTypes
 )
 from packages.train.training import Trainer
-from packages.models.vqae_light_ts import VQAELightConfig
+from packages.models.vqae_light import VQAELightConfig
 from packages.data_objects.dataset import autoencoder_unpack_func
 model_config = VQAELightConfig(
     use_quantizer=False,
@@ -23,7 +23,7 @@ model_config = VQAELightConfig(
 
 config = {
     'model': {
-        'model_type': ModelType.VQAE23_LTS,
+        'model_type': ModelType.VQAE23_SMALL,
         'model_kwargs': {
             'config': model_config
         }
@@ -47,8 +47,8 @@ config = {
         }
     },
     'loss': {
-        'loss_type': LossType.VQAE23LOSS,
-        'loss_kwargs': {'power_weight': 0, 'magnitude_weight': 0, 'phase_weight': 0}
+        'loss_type': LossType.MSE,
+        'loss_kwargs': {}#{'power_weight': 0, 'magnitude_weight': 0, 'phase_weight': 0}
     },
     'optimizer': {
         'type': OptimizerType.ADAMW,
@@ -57,7 +57,7 @@ config = {
         'weight_decay': 0.0001
     },
     'gradient_control': {
-        'grad_clip': None,
+        'grad_clip': 1.0,
         'use_amp': False
     },
     'train_loop': {
@@ -78,7 +78,7 @@ config = {
         },
         'backup_manager': None,
         'reduce_lr_on_plateau': None,
-        'gradient_logger': None, #{'interval': 1}
+        'gradient_logger': None, #{'interval': 1},
         'custom_plotter': {
             'plot_function': CustomPlotTypes.SCATTER,
             'plot_function_args': {},

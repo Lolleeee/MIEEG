@@ -5,6 +5,8 @@ import numpy as np
 from dataclasses import dataclass
 from typing import Dict
 
+from packages.models.wavelet_head import WaveletSynthesisHead
+
 
 @dataclass
 class VQAELightConfig:
@@ -497,7 +499,6 @@ class VQAELight(nn.Module):
                 n_cycles=5.0,
                 trainable=False,
                 chunk_samples=config.chunk_samples,
-                use_log_compression=config.use_log_compression,
                 normalize_outputs=config.normalize_outputs,
                 learnable_norm=config.learnable_norm
             )
@@ -519,6 +520,8 @@ class VQAELight(nn.Module):
         self.decoder = SymmetricalDecoder3D(config)
         self.apply(self._init_weights)
 
+        self.synthesis_head = WaveletSynthesisHead(self.cwt_head, learn_freq_gains=True)
+    
     def _init_weights(self, m):
         if isinstance(m, (nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.ConvTranspose1d, nn.ConvTranspose2d, nn.ConvTranspose3d)):
             nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
@@ -549,11 +552,15 @@ class VQAELight(nn.Module):
         return self.decoder(z_q)
 
     def forward(self, x):
-        if self.use_cwt:
-            x_cwt = self.cwt_head(x)
-        else:
+        if not self.use_cwt:
             raise ValueError("This version assumes use_cwt=True")
 
+        B = x.shape[0]  # original batch size (needed for unchunking)
+
+        # Analysis
+        x_cwt = self.cwt_head(x)  # (B*num_chunks, 2, F, 7, 5, chunk_T)
+
+        # AE
         z_e = self.encode(x_cwt)
 
         if self.config.use_quantizer:
@@ -562,34 +569,33 @@ class VQAELight(nn.Module):
             z_q = z_e
             indices = torch.zeros(z_e.shape[0], device=z_e.device).long()
             vq_losses = {
-                'vq_loss': torch.tensor(0., device=z_e.device),
-                'perplexity': torch.tensor(0., device=z_e.device),
-                'codebook_usage': torch.tensor(1., device=z_e.device)
+                "vq_loss": torch.tensor(0., device=z_e.device),
+                "perplexity": torch.tensor(0., device=z_e.device),
+                "codebook_usage": torch.tensor(1., device=z_e.device),
             }
 
-        recon_cwt = self.decode(z_q)
+        recon_cwt = self.decode(z_q)  # (B*num_chunks, 2, F, 7, 5, chunk_T)
 
-        Bc, C, F, H, W, T = recon_cwt.shape
-        recon_flat = recon_cwt.reshape(Bc, C * F * H * W, T)
-        target_flat = x_cwt.reshape(Bc, C * F * H * W, T)
-        
-        if self.use_cwt and self.chunk_samples is not None:
-            recon = self.cwt_head._unchunk(recon_flat)
-            target = self.cwt_head._unchunk(target_flat)
-        else:
-            recon = recon_flat
-            target = target_flat
+        # ===== Synthesis to time =====
+        recon_time_chunks = self.synthesis_head(recon_cwt)  # (B*num_chunks, 32, chunk_T)
+
+        # Unchunk back to full signal
+        recon_time = self.cwt_head._unchunk(recon_time_chunks)  # (B, 32, Total_T)
+
+        # Time-domain target
+        target_time = x  # (B, 32, Total_T)
 
         return {
-            'reconstruction': recon,
-            'target': target,
-            'embeddings': z_e,
-            'quantized': z_q,
-            'indices': indices,
-            **vq_losses
+            "reconstruction": recon_time,
+            "target": target_time,
+            "target_cwt": x_cwt,       # optional: keep for monitoring
+            "recon_cwt": recon_cwt,    # optional: keep for monitoring
+            "embeddings": z_e,
+            "quantized": z_q,
+            "indices": indices,
+            **vq_losses,
         }
-
-
+    
 if __name__ == "__main__":
     # Compare both versions
     print("="*80)
@@ -623,3 +629,24 @@ if __name__ == "__main__":
     print(f"Reconstruction: {outputs['reconstruction'].shape}")
     print(f"Embeddings:     {outputs['embeddings'].shape}")
     print("✓ Forward pass successful!")
+
+    # Plot time series for 5 channels
+    import matplotlib.pyplot as plt
+
+    channels_to_plot = [0, 8, 16, 24, 31]  # Select 5 channels across the range
+    fig, axes = plt.subplots(len(channels_to_plot), 1, figsize=(15, 10))
+    fig.suptitle('Time Series - Original vs Reconstructed (5 channels)', fontsize=14)
+
+    for idx, ch in enumerate(channels_to_plot):
+        ax = axes[idx]
+        # Plot original
+        ax.plot(dummy_input[0, ch].numpy(), label='Original', alpha=0.7, linewidth=1)
+        # Plot reconstruction
+        ax.plot(outputs['reconstruction'][0, ch].numpy(), label='Reconstructed', alpha=0.7, linewidth=1)
+        ax.set_ylabel(f'Ch {ch}')
+        ax.legend(loc='upper right')
+        ax.grid(True, alpha=0.3)
+
+    axes[-1].set_xlabel('Time samples')
+    plt.tight_layout()
+    plt.show()

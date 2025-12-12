@@ -17,11 +17,15 @@ class TorchMSELoss(TorchLoss):
         """MSE Loss with automatic validation"""
         super().__init__(expected_model_output_keys=['reconstruction'], 
                          expected_loss_keys=['loss'])
+        
         self.name = "TorchMSELoss"
         self.function = nn.MSELoss(reduction='mean')
-    def _compute_loss(self, outputs: Dict, inputs: torch.Tensor) -> torch.Tensor:
+
+    def _compute_loss(self, outputs: Dict, inputs: Dict) -> Dict:
         rec = outputs['reconstruction']
-        loss = self.function(rec, inputs)
+        target = inputs['target']
+        loss = self.function(rec, target)
+
         return {'loss': loss}
 
 class TorchL1Loss(TorchLoss):
@@ -415,54 +419,18 @@ class VQAE23Loss(TorchLoss):
     
 
 class CWTMSE(TorchLoss):
-    def __init__(self, scale_factor='sqrt'):
-        """
-        MSE Loss with dimensionality scaling
-        
-        Args:
-            scale_factor: 'sqrt', 'linear', or float
-                         'sqrt' = multiply by sqrt(n_elements)
-                         'linear' = multiply by n_elements
-                         float = custom multiplier
-        """
+    def __init__(self):
+        """MSE Loss with automatic validation"""
         super().__init__(expected_model_output_keys=['reconstruction', 'target'], 
                          expected_loss_keys=['loss'])
-        self.name = "ScaledCWTMSE"
+        self.name = "CustomMSE"
         self.function = nn.MSELoss(reduction='mean')
-        self.scale_factor = scale_factor
-        
-        # Calculate scale based on expected shape (2, 25, 7, 5, 160)
-        n_elements = 2 * 25 * 7 * 5 * 160  # 280,000
-        
-        if scale_factor == 'sqrt':
-            self.scale = np.sqrt(n_elements)  # ≈ 529
-        elif scale_factor == 'linear':
-            self.scale = n_elements  # 280,000
-        elif isinstance(scale_factor, (int, float)):
-            self.scale = scale_factor
-        else:
-            self.scale = 1.0
-        
-        print(f"Using scale factor: {self.scale:.2f}")
-    
     def _compute_loss(self, outputs: Dict, inputs: torch.Tensor) -> torch.Tensor:
-        rec = outputs['reconstruction']      # (B, 2, 25, 7, 5, 160)
+        rec = outputs['reconstruction']
         target = outputs['target']
-        
-        # Compute MSE
-        loss_raw = self.function(rec, target)
-        
-        # Scale up
-        loss_scaled = loss_raw * self.scale
-        
-        # Optional: separate magnitude/phase for monitoring
-        mag_loss = self.function(rec[:, 0], target[:, 0]) * self.scale
-        phase_loss = self.function(rec[:, 1], target[:, 1]) * self.scale
-        
-        print(f"Scaled Loss: {loss_scaled.item():.4f} (Mag: {mag_loss.item():.4f}, Phase: {phase_loss.item():.4f})")
-        
-        return {'loss': loss_scaled}
+        loss = self.function(rec, target)
 
+        return {'loss': loss}
 
 
 # WARNING: DOESN?T WORK IF HEAD HAS LEARNABLE PARAMETERS

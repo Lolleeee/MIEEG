@@ -484,7 +484,7 @@ class SOTATimeFrequencyDecoder(nn.Module):
         
         # Combine both paths (learnable weighting)
         final = self.alpha_freq * freq_recon + (1 - self.alpha_freq) * time_recon
-        
+        print(self.alpha_freq.item())
         return final
     
     def _freq_to_time(self, magnitude, phase, target_length):
@@ -499,7 +499,6 @@ class SOTATimeFrequencyDecoder(nn.Module):
         time_signal = torch.fft.irfft(complex_spectrum, n=target_length, dim=-1)
         
         return time_signal
-
 
 
 
@@ -604,7 +603,7 @@ class VQAELight(nn.Module):
             config.epsilon
         )
         
-        self.decoder = SOTATimeFrequencyDecoder(config)
+        self.decoder = FrequencyOnlyDecoder(config)
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
