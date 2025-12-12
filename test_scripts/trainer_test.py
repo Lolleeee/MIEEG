@@ -47,7 +47,7 @@ config = {
         }
     },
     'loss': {
-        'loss_type': LossType.MSE,
+        'loss_type': LossType.L1,
         'loss_kwargs': {}#{'power_weight': 0, 'magnitude_weight': 0, 'phase_weight': 0}
     },
     'optimizer': {

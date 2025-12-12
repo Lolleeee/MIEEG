@@ -29,28 +29,33 @@ class TorchMSELoss(TorchLoss):
         return {'loss': loss}
 
 class TorchL1Loss(TorchLoss):
-    """L1 Loss with optional embedding regularization"""
-    
-    def __init__(self, emb_loss=0, scale=1.0):
-        super().__init__(expected_model_output_keys=['reconstruction', 'embeddings'], 
-        expected_loss_keys=['loss'])
+    """SmoothL1 (Huber-like) loss with optional embedding regularization."""
+
+    def __init__(self, emb_loss=0.0, scale=1.0, beta=1.0, reduction="mean"):
+        super().__init__(
+            expected_model_output_keys=["reconstruction", "embeddings"],
+            expected_loss_keys=["loss"],
+        )
         self.emb_loss = emb_loss
         self.scale = scale
-    
-    def _compute_loss(self, outputs: Dict, inputs: torch.Tensor) -> torch.Tensor:
-        # Get reconstruction
-        reconstruction = self._get_main_output(outputs)
-        
-        # Base L1 loss
-        loss = F.l1_loss(reconstruction, inputs)
+        self.beta = beta
+        self.reduction = reduction
 
-        embedding = outputs['embeddings']
-        # Optional embedding regularization
+    def _compute_loss(self, outputs: Dict, inputs: torch.Tensor) -> Dict[str, torch.Tensor]:
+        reconstruction = outputs["reconstruction"]
+        target = inputs["target"]
+
+        # SmoothL1 uses squared error when |err| < beta and L1 otherwise. [web:227]
+        loss = F.smooth_l1_loss(
+            reconstruction, target, beta=self.beta, reduction=self.reduction
+        )  # [web:227]
+
+        embedding = outputs.get("embeddings", None)
         if self.emb_loss > 0 and embedding is not None:
-            L1_norm = torch.mean(torch.abs(embedding))
-            loss += self.emb_loss * L1_norm
-        
-        return {'loss': loss * self.scale}
+            l1_norm = torch.mean(torch.abs(embedding))
+            loss = loss + self.emb_loss * l1_norm
+
+        return {"loss": loss * self.scale}
 
 
 class SequenceVQVAELoss(TorchLoss):
