@@ -458,6 +458,7 @@ class MSEPlusLoss(TorchLoss):
         # Precompute frequency weights (F,)
         freqs = torch.tensor(freqs, dtype=torch.float32)
         w = (freqs / freqs.min()).pow(freq_alpha)  # higher freq => larger weight if alpha>0
+        w = w.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
         self.register_buffer("freq_w", w)
 
     def _compute_loss(self, outputs: Dict, inputs: Dict) -> Dict:
@@ -473,7 +474,7 @@ class MSEPlusLoss(TorchLoss):
         # Per-frequency weighting, normalized so mean weight ~1
         w = self.freq_w / (self.freq_w.mean() + self.eps)           # (F,)
         w = w[None, None, :, None, None, None]                      # broadcast
-        print(w.device, rec_cwt.device, tgt_cwt.device)
+        
         loss_cwt = (w * (rec_cwt - tgt_cwt).pow(2)).mean()
 
         loss = loss_time + self.lam_cwt * loss_cwt
