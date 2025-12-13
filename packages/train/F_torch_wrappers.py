@@ -53,7 +53,7 @@ class TorchWrapper(nn.Module):
             outputs = {f'main_output' if i == 0 else f'output_{i}': out for i, out in enumerate(outputs)}
         elif isinstance(outputs, dict):
             for key, value in outputs.items():
-                if not isinstance(value, (torch.Tensor, int, float, CWTHead)):
+                if not isinstance(value, (torch.Tensor, int, float)):
                     raise TypeError(f"Output '{key}' must be a tensor or scalar, got {type(value)}")
         else:
             raise TypeError(f"Outputs must be Tensor, Dict, or Tuple. Got {type(outputs)}")

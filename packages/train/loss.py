@@ -473,7 +473,7 @@ class MSEPlusLoss(TorchLoss):
         # Per-frequency weighting, normalized so mean weight ~1
         w = self.freq_w / (self.freq_w.mean() + self.eps)           # (F,)
         w = w[None, None, :, None, None, None]                      # broadcast
-
+        print(w.device, rec_cwt.device, tgt_cwt.device)
         loss_cwt = (w * (rec_cwt - tgt_cwt).pow(2)).mean()
 
         loss = loss_time + self.lam_cwt * loss_cwt
