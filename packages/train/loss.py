@@ -438,25 +438,44 @@ class CWTMSE(TorchLoss):
         return {'loss': loss}
 
 
-# WARNING: DOESN?T WORK IF HEAD HAS LEARNABLE PARAMETERS
-from packages.models.wavelet_head import CWTHead
-class CWTLoss(TorchLoss):
-    def __init__(self):
-        """Continuous Wavelet Transform Loss
-        Uses CWT head to compute loss in time-frequency domain.
-        """
-        super().__init__(expected_model_output_keys=['reconstruction'], 
-                         expected_loss_keys=['loss'])
-        self.name = "CWTLoss"
-        self.function = nn.MSELoss(reduction='mean')
-        self.cwt_head = CWTHead(fs=160, frequencies=np.logspace(np.log10(0.5), np.log10(79.9), 25))
-    def _compute_loss(self, outputs: dict, batch: dict) -> dict:
-        rec = outputs['reconstruction']
-        target = batch['target']
-        
-        rec_cwt = self.cwt_head(rec)
-        target_cwt = self.cwt_head(target)
-        
-        loss = self.function(rec_cwt, target_cwt)
+class MSEPlusLoss(TorchLoss):
+    def __init__(
+        self,               # frozen CWTHead used by the model
+        freqs,
+        lam_cwt: float = 0.5,     # weight of CWT consistency term
+        freq_alpha: float = 0.0,  # 0=equal; >0 upweights higher freqs (f^alpha)
+        eps: float = 1e-6,
+    ):
+        super().__init__(expected_model_output_keys=['reconstruction'],
+                         expected_loss_keys=['loss', 'loss_time', 'loss_cwt'])
+        self.name = "TorchMSEPlusCWTConsistencyLoss"
+        self.cwt = None
+        self.lam_cwt = lam_cwt
+        self.freq_alpha = freq_alpha
+        self.eps = eps
+        self.mse = nn.MSELoss(reduction="mean")
 
-        return {'loss': loss}
+        # Precompute frequency weights (F,)
+        freqs = torch.tensor(freqs, dtype=torch.float32)
+        w = (freqs / freqs.min()).pow(freq_alpha)  # higher freq => larger weight if alpha>0
+        self.register_buffer("freq_w", w)
+
+    def _compute_loss(self, outputs: Dict, inputs: Dict) -> Dict:
+        rec = outputs['reconstruction']  # (B, 32, T)
+        target = inputs['target']        # (B, 32, T)
+        rec_cwt = outputs['rec_cwt']  # CWTHead used by the model
+        tgt_cwt = outputs['tgt_cwt']
+        # 1) time-domain check (optional proxy)
+        loss_time = self.mse(rec, target)
+
+        # 2) CWT consistency: compare CWT(target) vs CWT(rec)
+
+        # Per-frequency weighting, normalized so mean weight ~1
+        w = self.freq_w / (self.freq_w.mean() + self.eps)           # (F,)
+        w = w[None, None, :, None, None, None]                      # broadcast
+
+        loss_cwt = (w * (rec_cwt - tgt_cwt).pow(2)).mean()
+
+        loss = loss_time + self.lam_cwt * loss_cwt
+        return {'loss': loss, 'loss_time': loss_time.detach(), 'loss_cwt': loss_cwt.detach()}
+

@@ -528,9 +528,14 @@ class VQAELight(nn.Module):
         else:
             recon = recon_chunk
 
+        with torch.no_grad():
+            tgt_cwt = self.cwt_head(recon)
+            
         return {
             'reconstruction': recon,
             'embeddings': z_e,
+            'rec_cwt': x_cwt,
+            'tgt_cwt': tgt_cwt,
             'quantized': z_q,
             'indices': indices,
             **vq_losses

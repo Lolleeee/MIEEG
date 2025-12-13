@@ -47,8 +47,8 @@ config = {
         }
     },
     'loss': {
-        'loss_type': LossType.MSE,
-        'loss_kwargs': {}#{'power_weight': 0, 'magnitude_weight': 0, 'phase_weight': 0}
+        'loss_type': LossType.MSEPLUS,
+        'loss_kwargs': {'freqs': model_config.cwt_frequencies}#{'power_weight': 0, 'magnitude_weight': 0, 'phase_weight': 0}
     },
     'optimizer': {
         'type': OptimizerType.ADAMW,
