@@ -353,217 +353,65 @@ class EfficientChannelAttention(nn.Module):
         attn_weights = self.attention(x)  # (B, C, 1)
         return x * attn_weights
 
-class SOTATimeFrequencyDecoder(nn.Module):
+class LiteChannelAttention(nn.Module):
+    def __init__(self, channels, reduction=8):
+        super().__init__()
+        r = max(channels // reduction, 8)
+        self.net = nn.Sequential(
+            nn.AdaptiveAvgPool1d(1),
+            nn.Conv1d(channels, r, 1),
+            nn.GELU(),
+            nn.Conv1d(r, channels, 1),
+            nn.Sigmoid()
+        )
+    def forward(self, x):
+        return x * self.net(x)
+
+# --- lightweight decoder: small seed -> upsample -> depthwise-sep convs ---
+class MultiScaleDecoderLite(nn.Module):
     """
-    State-of-the-art decoder combining insights from RAVE, D-FaST, and TF-Fusion.
-    
-    Key principles:
-    1. Multi-scale processing (like RAVE's multi-band)
-    2. Separate time/freq encodings (like TF-Fusion)
-    3. Cross-attention fusion (like D-FaST)
+    Much smaller decoder than the original:
+    - Seed length 20, channels 64 (instead of two huge FC branches)
+    - Two light branches (k=9 and k=3) but no big FC expansions
     """
-    def __init__(self, config: VQAELightConfig):
+    def __init__(self, config: VQAELightConfig, seed_len=20, seed_ch=64, mid_ch=48):
         super().__init__()
         self.config = config
-        hidden_dim = max(512, config.embedding_dim // 2)
-        
-        # Shared projection
-        self.projection = nn.Sequential(
-            nn.Linear(config.embedding_dim, hidden_dim),
-            nn.LayerNorm(hidden_dim),
+        self.seed_len = seed_len
+        self.seed_ch = seed_ch
+
+        # emb -> (seed_ch * seed_len)
+        self.to_seed = nn.Sequential(
+            nn.Linear(config.embedding_dim, seed_ch * seed_len, bias=False),
+            nn.LayerNorm(seed_ch * seed_len),
             nn.GELU()
         )
-        
-        # ===== FREQUENCY DOMAIN BRANCH =====
-        # Reconstructs spectral features (magnitude + phase)
-        self.freq_branch = nn.Sequential(
-            nn.Linear(hidden_dim, 128 * 40),
-            nn.Unflatten(1, (128, 40)),
-            
-            nn.ConvTranspose1d(128, 64, kernel_size=4, stride=2, padding=1),
-            nn.GroupNorm(8, 64),
+
+        # branches: operate after upsample to 160
+        self.branch_low = nn.Sequential(
+            nn.Upsample(size=160, mode="linear", align_corners=False),
+            DepthwiseSeparableConv1d(seed_ch, mid_ch, kernel_size=9),
             nn.GELU(),
-            
-            DepthwiseSeparableConv1d(64, 64, kernel_size=7),
-            nn.GroupNorm(8, 64),
-            nn.GELU()
         )
-        
-        # Separate heads for magnitude and phase
-        self.freq_magnitude_head = nn.Sequential(
-            nn.Conv1d(64, config.orig_channels, 1),
-            nn.Softplus()
-        )
-        
-        self.freq_phase_head = nn.Sequential(
-            nn.Conv1d(64, config.orig_channels, 1),
-            nn.Tanh()  # [-π, π]
-        )
-        
-        # ===== TIME DOMAIN BRANCH =====
-        # Reconstructs temporal structure
-        self.time_branch = nn.Sequential(
-            nn.Linear(hidden_dim, 256 * 40),
-            nn.Unflatten(1, (256, 40)),
-            
-            nn.ConvTranspose1d(256, 128, kernel_size=8, stride=2, padding=3),
-            nn.GroupNorm(16, 128),
+        self.branch_high = nn.Sequential(
+            nn.Upsample(size=160, mode="linear", align_corners=False),
+            DepthwiseSeparableConv1d(seed_ch, mid_ch, kernel_size=3),
             nn.GELU(),
-            DepthwiseSeparableConv1d(128, 128, kernel_size=5),
-            nn.GroupNorm(16, 128),
+        )
+
+        self.fuse = nn.Sequential(
+            nn.Conv1d(2 * mid_ch, 2 * mid_ch, 1, bias=False),
             nn.GELU(),
-            
-            nn.ConvTranspose1d(128, 64, kernel_size=8, stride=2, padding=3),
-            nn.GroupNorm(8, 64),
-            nn.GELU()
+            LiteChannelAttention(2 * mid_ch, reduction=8),
+            nn.Conv1d(2 * mid_ch, config.orig_channels, 1, bias=True)
         )
-        
-        # ===== CROSS-ATTENTION FUSION =====
-        # Fuses time and frequency information
-        self.cross_attention = nn.MultiheadAttention(
-            embed_dim=64,
-            num_heads=8,
-            batch_first=True
-        )
-        
-        # Final projection after fusion
-        self.fusion_head = nn.Sequential(
-            nn.Conv1d(64, 64, 1),
-            nn.GELU(),
-            EfficientResidualBlock1d(64),
-            nn.Conv1d(64, config.orig_channels, 1)
-        )
-        
-        # Learnable weights
-        self.alpha_freq = nn.Parameter(torch.tensor(0.7))  # Favor frequency reconstruction
-    
+
     def forward(self, z_q):
-        """
-        Args:
-            z_q: (B, embedding_dim)
-        Returns:
-            (B, 32, 160) - final signal
-        """
-        shared = self.projection(z_q)
-        
-        # Branch 1: Frequency domain
-        freq_features = self.freq_branch(shared)  # (B, 64, 81)
-        freq_magnitude = self.freq_magnitude_head(freq_features)  # (B, 32, 81)
-        freq_phase = self.freq_phase_head(freq_features) * torch.pi  # (B, 32, 81)
-        
-        # Branch 2: Time domain  
-        time_features = self.time_branch(shared)  # (B, 64, 160)
-        
-        # Cross-attention fusion
-        # Query: time features, Key/Value: freq features (upsampled)
-        freq_features_upsampled = F.interpolate(
-            freq_features, 
-            size=time_features.shape[-1], 
-            mode='linear', 
-            align_corners=False
-        )  # (B, 64, 160)
-        
-        # Reshape for attention: (B, T, C)
-        time_attn = time_features.transpose(1, 2)  # (B, 160, 64)
-        freq_attn = freq_features_upsampled.transpose(1, 2)  # (B, 160, 64)
-        
-        # Cross-attention: time attends to frequency
-        fused_features, _ = self.cross_attention(
-            query=time_attn,
-            key=freq_attn,
-            value=freq_attn
-        )  # (B, 160, 64)
-        
-        fused_features = fused_features.transpose(1, 2)  # (B, 64, 160)
-        
-        # Time-domain reconstruction from fusion
-        time_recon = self.fusion_head(fused_features)  # (B, 32, 160)
-        
-        # Frequency-domain reconstruction
-        freq_recon = self._freq_to_time(freq_magnitude, freq_phase, target_length=160)
-        
-        # Combine both paths (learnable weighting)
-        final = self.alpha_freq * freq_recon + (1 - self.alpha_freq) * time_recon
-        print(self.alpha_freq.item())
-        return final
-    
-    def _freq_to_time(self, magnitude, phase, target_length):
-        """Convert frequency domain to time domain."""
-        n_fft = (target_length // 2) + 1
-        
-        if magnitude.shape[-1] != n_fft:
-            magnitude = F.interpolate(magnitude, size=n_fft, mode='linear', align_corners=False)
-            phase = F.interpolate(phase, size=n_fft, mode='linear', align_corners=False)
-        
-        complex_spectrum = magnitude * torch.exp(1j * phase)
-        time_signal = torch.fft.irfft(complex_spectrum, n=target_length, dim=-1)
-        
-        return time_signal
-
-
-
-class MultiScaleDecoder(nn.Module):
-    """
-    Multi-scale decoder that reconstructs low and high frequencies separately.
-    Addresses time-frequency trade-off in EEG reconstruction.
-    """
-    def __init__(self, config: VQAELightConfig):
-        super().__init__()
-        self.config = config
-        
-        # Shared projection from bottleneck
-        self.projection = nn.Sequential(
-            nn.Linear(config.embedding_dim, 512),
-            nn.LayerNorm(512),
-            nn.GELU()
-        )
-        
-        # Low-frequency path (0-20 Hz) - smooth, long-range dependencies
-        self.low_freq_path = nn.Sequential(
-            nn.Linear(512, 128 * 40),
-            nn.Unflatten(1, (128, 40)),
-            nn.Upsample(scale_factor=4, mode='linear', align_corners=False),  # → 160
-            DepthwiseSeparableConv1d(128, 64, kernel_size=9),  # Large kernel for smooth features
-            nn.GroupNorm(8, 64),
-            nn.GELU(),
-            EfficientResidualBlock1d(64)
-        )
-        
-        # High-frequency path (20-80 Hz) - preserve sharp details
-        self.high_freq_path = nn.Sequential(
-            nn.Linear(512, 128 * 40),
-            nn.Unflatten(1, (128, 40)),
-            nn.Upsample(scale_factor=4, mode='linear', align_corners=False),  # → 160
-            DepthwiseSeparableConv1d(128, 64, kernel_size=3),  # Small kernel for details
-            nn.GroupNorm(8, 64),
-            nn.GELU(),
-            EfficientResidualBlock1d(64)
-        )
-        
-        # Combine both frequency bands
-        self.combine = nn.Sequential(
-            nn.Conv1d(128, 128, 1),  # Mix low + high (64 + 64 = 128)
-            nn.GELU(),
-            EfficientChannelAttention(128, reduction=8),
-            nn.Conv1d(128, config.orig_channels, 1, groups=8)  # → 32 channels
-        )
-    
-    def forward(self, z_q):
-        """
-        Args:
-            z_q: (B, embedding_dim)
-        Returns:
-            (B, 32, 160)
-        """
-        x = self.projection(z_q)  # (B, 512)
-        
-        # Parallel frequency-specific processing
-        low = self.low_freq_path(x)   # (B, 64, 160)
-        high = self.high_freq_path(x)  # (B, 64, 160)
-        
-        # Concatenate and combine
-        combined = torch.cat([low, high], dim=1)  # (B, 128, 160)
-        return self.combine(combined)  # (B, 32, 160)
+        b = z_q.shape[0]
+        x = self.to_seed(z_q).view(b, self.seed_ch, self.seed_len)   # (B, seed_ch, 20)
+        low = self.branch_low(x)                                     # (B, mid_ch, 160)
+        high = self.branch_high(x)                                   # (B, mid_ch, 160)
+        return self.fuse(torch.cat([low, high], dim=1))              # (B, 32, 160)
 
 
 class VQAELight(nn.Module):
@@ -603,7 +451,7 @@ class VQAELight(nn.Module):
             config.epsilon
         )
         
-        self.decoder = FrequencyOnlyDecoder(config)
+        self.decoder = MultiScaleDecoderLite(self.config, seed_len=20, seed_ch=64, mid_ch=48)
         self.apply(self._init_weights)
 
     def _init_weights(self, m):

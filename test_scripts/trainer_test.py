@@ -12,7 +12,7 @@ from packages.train.trainer_config_schema import (
     CustomPlotTypes
 )
 from packages.train.training import Trainer
-from packages.models.vqae_light import VQAELightConfig
+from packages.models.vqae_light_ts import VQAELightConfig
 from packages.data_objects.dataset import autoencoder_unpack_func
 model_config = VQAELightConfig(
     use_quantizer=False,
@@ -23,7 +23,7 @@ model_config = VQAELightConfig(
 
 config = {
     'model': {
-        'model_type': ModelType.VQAE23_SMALL,
+        'model_type': ModelType.VQAE23_LTS,
         'model_kwargs': {
             'config': model_config
         }
@@ -47,12 +47,12 @@ config = {
         }
     },
     'loss': {
-        'loss_type': LossType.L1,
+        'loss_type': LossType.MSE,
         'loss_kwargs': {}#{'power_weight': 0, 'magnitude_weight': 0, 'phase_weight': 0}
     },
     'optimizer': {
         'type': OptimizerType.ADAMW,
-        'lr': 0.001,
+        'lr': 0.01,
         'asym_lr': None,
         'weight_decay': 0.0001
     },
