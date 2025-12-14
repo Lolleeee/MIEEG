@@ -535,11 +535,11 @@ class VQAELight(nn.Module):
         
 
 
-        for i in range(rec_cwt.shape[2]):
-            values = rec_cwt[:, :, i, :, :].detach().cpu().numpy().flatten()
-            print(f"REC {self.config.cwt_frequencies[i]:<12.2f} | {np.mean(values):<10.4f} | {np.std(values):<10.4f} | {np.min(values):<10.4f} | {np.max(values):<10.4f}")
-            values = tgt_cwt[:, :, i, :, :].detach().cpu().numpy().flatten()
-            print(f"TARGET {self.config.cwt_frequencies[i]:<12.2f} | {np.mean(values):<10.4f} | {np.std(values):<10.4f} | {np.min(values):<10.4f} | {np.max(values):<10.4f}")
+        # for i in range(rec_cwt.shape[2]):
+        #     values = rec_cwt[:, :, i, :, :].detach().cpu().numpy().flatten()
+        #     print(f"REC {self.config.cwt_frequencies[i]:<12.2f} | {np.mean(values):<10.4f} | {np.std(values):<10.4f} | {np.min(values):<10.4f} | {np.max(values):<10.4f}")
+        #     values = tgt_cwt[:, :, i, :, :].detach().cpu().numpy().flatten()
+        #     print(f"TARGET {self.config.cwt_frequencies[i]:<12.2f} | {np.mean(values):<10.4f} | {np.std(values):<10.4f} | {np.min(values):<10.4f} | {np.max(values):<10.4f}")
         return {
             'reconstruction': recon,
             'embeddings': z_e,
