@@ -11,7 +11,6 @@ class CWTHead(nn.Module):
         n_cycles: float = 6.0,
         trainable: bool = False,
         chunk_samples: int = None,
-        use_log_compression: bool = True,   # kept for API compatibility (unused in real/imag mode)
         normalize_outputs: bool = True,
         learnable_norm: bool = True
     ):
@@ -26,9 +25,6 @@ class CWTHead(nn.Module):
         self.frequencies = np.array(frequencies)
         self.num_freqs = len(frequencies)
         self.chunk_size_samples = chunk_samples
-
-        # kept but not used in real/imag output
-        self.use_log_compression = use_log_compression
 
         self.normalize_outputs = normalize_outputs
         self.learnable_norm = learnable_norm

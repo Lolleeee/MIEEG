@@ -14,7 +14,6 @@ class VQAELightConfig:
     # CWT parameters
     cwt_frequencies: tuple = None
     chunk_samples: int = 160  # if None, no chunking
-    use_log_compression = True
     normalize_outputs = True
     learnable_norm = True
 
@@ -432,7 +431,6 @@ class VQAELight(nn.Module):
                 n_cycles=5.0,
                 trainable=False,
                 chunk_samples=config.chunk_samples,
-                use_log_compression=config.use_log_compression,
                 normalize_outputs=config.normalize_outputs,
                 learnable_norm=config.learnable_norm
             )
@@ -453,7 +451,12 @@ class VQAELight(nn.Module):
         
         self.decoder = MultiScaleDecoderLite(self.config, seed_len=20, seed_ch=64, mid_ch=48)
         self.apply(self._init_weights)
-
+        self.cwt_head.conv.weight.data.copy_(
+        self.cwt_head._create_morlet_weights(self.config.cwt_frequencies, fs=160,
+                                            K=self.cwt_head.conv.kernel_size[0],
+                                            n_cycles_max=5.0)
+        )   
+        self.cwt_head.conv.weight.requires_grad = False
     def _init_weights(self, m):
         if isinstance(m, (nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.ConvTranspose1d)):
             nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
@@ -500,12 +503,12 @@ class VQAELight(nn.Module):
             'target': (B, 32, 640)
         """
         if self.use_cwt:
-            x_cwt = self.cwt_head(x)   # expects chunked CWT output
+            tgt_cwt = self.cwt_head(x)   # expects chunked CWT output
         else:
             raise ValueError("This version assumes use_cwt=True")
 
         # Encode
-        z_e = self.encode(x_cwt)
+        z_e = self.encode(tgt_cwt)
 
         # Quantize
         if self.config.use_quantizer:
@@ -528,12 +531,19 @@ class VQAELight(nn.Module):
         else:
             recon = recon_chunk
 
-        tgt_cwt = self.cwt_head(recon)
+        rec_cwt = self.cwt_head(recon)
+        
 
+
+        for i in range(rec_cwt.shape[2]):
+            values = rec_cwt[:, :, i, :, :].detach().cpu().numpy().flatten()
+            print(f"REC {self.config.cwt_frequencies[i]:<12.2f} | {np.mean(values):<10.4f} | {np.std(values):<10.4f} | {np.min(values):<10.4f} | {np.max(values):<10.4f}")
+            values = tgt_cwt[:, :, i, :, :].detach().cpu().numpy().flatten()
+            print(f"TARGET {self.config.cwt_frequencies[i]:<12.2f} | {np.mean(values):<10.4f} | {np.std(values):<10.4f} | {np.min(values):<10.4f} | {np.max(values):<10.4f}")
         return {
             'reconstruction': recon,
             'embeddings': z_e,
-            'rec_cwt': x_cwt,
+            'rec_cwt': rec_cwt,
             'tgt_cwt': tgt_cwt,
             'quantized': z_q,
             'indices': indices,

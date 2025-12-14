@@ -47,8 +47,8 @@ config = {
         }
     },
     'loss': {
-        'loss_type': LossType.MSEPLUS,
-        'loss_kwargs': {'freqs': model_config.cwt_frequencies}#{'power_weight': 0, 'magnitude_weight': 0, 'phase_weight': 0}
+        'loss_type': LossType.MSE,
+        'loss_kwargs': {}#{'freqs': model_config.cwt_frequencies}#{'power_weight': 0, 'magnitude_weight': 0, 'phase_weight': 0}
     },
     'optimizer': {
         'type': OptimizerType.ADAMW,
@@ -68,7 +68,7 @@ config = {
         'history_plot': {
             'plot_type': PlotType.EXTENDED,
             'save_path': './training_history',
-            'metrics_logged': ['loss']
+            'metrics_logged': ['loss']#, 'loss_time', 'loss_cwt']
         },
         'early_stopping': {
             'patience': 1000,
