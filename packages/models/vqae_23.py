@@ -14,7 +14,6 @@ class VQAE23Config:
     # CWT parameters
     cwt_frequencies: tuple = None
     chunk_samples: int = 160
-    use_log_compression = True
     normalize_outputs = True
     learnable_norm = True
     
@@ -531,7 +530,6 @@ class VQAE23(nn.Module):
                 n_cycles=5.0,
                 trainable=False,
                 chunk_samples=config.chunk_samples,
-                use_log_compression=config.use_log_compression,
                 normalize_outputs=config.normalize_outputs,
                 learnable_norm=config.learnable_norm
             )

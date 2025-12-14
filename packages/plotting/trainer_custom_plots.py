@@ -303,7 +303,7 @@ def plot_raweeg_fft_reconstruction(
 
 
 
-def plot_reconstruction_scatter_analysis(
+def plot_reconstruction_scatter_analysis_old(
     trainer: "Trainer",
     max_samples_per_plot: int = 10000  # Subsample for faster plotting
 ) -> None:
@@ -726,3 +726,346 @@ def plot_reconstruction_scatter_analysis(
     plt.suptitle('Raw Signal: Time Series Reconstruction', fontsize=14, y=0.995)
     plt.tight_layout()
     plt.show()
+
+def plot_reconstruction_scatter_analysis(
+    trainer: "Trainer",
+    max_samples_per_plot: int = 10000,
+    dim_names: Optional[List[str]] = None
+) -> None:
+    """
+    General scatter plot analysis that works with any dimensional tensor.
+    Analyzes reconstruction quality by comparing target vs reconstruction for each dimension index.
+    
+    Args:
+        trainer: Trainer object with model, train_loader, val_loader, and device
+        max_samples_per_plot: Maximum number of points to plot (for speed)
+        dim_names: Optional list of dimension names (e.g., ['batch', 'channels', 'time'])
+    """
+    
+    # Get samples from both loaders
+    train_batch = next(iter(trainer.train_loader))
+    val_batch = next(iter(trainer.val_loader))
+    
+    train_input = train_batch['input'][0].unsqueeze(0).to(trainer.device)
+    val_input = val_batch['input'][0].unsqueeze(0).to(trainer.device)
+    
+    # Forward pass
+    model = trainer.model
+    model.eval()
+    with torch.no_grad():
+        train_output = model(train_input)
+        val_output = model(val_input)
+    
+    # Extract target and reconstruction
+    train_target = train_output['target'].cpu().numpy()
+    train_recon = train_output['reconstruction'].cpu().numpy()
+    val_target = val_output['target'].cpu().numpy()
+    val_recon = val_output['reconstruction'].cpu().numpy()
+    
+    # Get shape information
+    shape = train_target.shape
+    ndims = len(shape)
+    
+    print("\n" + "="*80)
+    print("GENERAL SCATTER ANALYSIS")
+    print("="*80)
+    print(f"Data shape: {shape}")
+    print(f"Number of dimensions: {ndims}")
+    
+    # Generate dimension names if not provided
+    if dim_names is None:
+        dim_names = [f'Dim{i}' for i in range(ndims)]
+    else:
+        assert len(dim_names) == ndims, f"dim_names length {len(dim_names)} must match ndims {ndims}"
+    
+    print(f"Dimension names: {dim_names}")
+    print(f"Dimension sizes: {dict(zip(dim_names, shape))}")
+    
+    # Helper function to compute metrics
+    def compute_metrics(target, recon):
+        """Compute error metrics"""
+        error = recon - target
+        mae = np.mean(np.abs(error))
+        mse = np.mean(error ** 2)
+        rmse = np.sqrt(mse)
+        
+        ss_res = np.sum((target - recon) ** 2)
+        ss_tot = np.sum((target - np.mean(target)) ** 2)
+        r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+        
+        return mae, mse, rmse, r2
+    
+    # Helper for subsampling
+    def subsample(target, recon, max_samples):
+        if len(target) > max_samples:
+            indices = np.random.choice(len(target), max_samples, replace=False)
+            return target[indices], recon[indices]
+        return target, recon
+    
+    # ========================================================================
+    # OVERALL SCATTER PLOTS (Train vs Val)
+    # ========================================================================
+    print("\n" + "="*80)
+    print("OVERALL RECONSTRUCTION SCATTER PLOTS")
+    print("="*80)
+    
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    
+    # Train scatter
+    train_target_flat = train_target.flatten()
+    train_recon_flat = train_recon.flatten()
+    train_target_sub, train_recon_sub = subsample(train_target_flat, train_recon_flat, max_samples_per_plot)
+    
+    axes[0].scatter(train_target_sub, train_recon_sub, alpha=0.3, s=1, color='blue')
+    lim_min = min(train_target_sub.min(), train_recon_sub.min())
+    lim_max = max(train_target_sub.max(), train_recon_sub.max())
+    axes[0].plot([lim_min, lim_max], [lim_min, lim_max], 'r--', linewidth=2, label='Perfect')
+    
+    mae, mse, rmse, r2 = compute_metrics(train_target_flat, train_recon_flat)
+    axes[0].set_xlabel('Target', fontsize=12)
+    axes[0].set_ylabel('Reconstructed', fontsize=12)
+    axes[0].set_title(
+        f'Train Set\n'
+        f'MAE={mae:.4f} | RMSE={rmse:.4f} | R²={r2:.4f}',
+        fontsize=11
+    )
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
+    axes[0].set_aspect('equal', adjustable='box')
+    
+    # Val scatter
+    val_target_flat = val_target.flatten()
+    val_recon_flat = val_recon.flatten()
+    val_target_sub, val_recon_sub = subsample(val_target_flat, val_recon_flat, max_samples_per_plot)
+    
+    axes[1].scatter(val_target_sub, val_recon_sub, alpha=0.3, s=1, color='green')
+    lim_min = min(val_target_sub.min(), val_recon_sub.min())
+    lim_max = max(val_target_sub.max(), val_recon_sub.max())
+    axes[1].plot([lim_min, lim_max], [lim_min, lim_max], 'r--', linewidth=2, label='Perfect')
+    
+    mae, mse, rmse, r2 = compute_metrics(val_target_flat, val_recon_flat)
+    axes[1].set_xlabel('Target', fontsize=12)
+    axes[1].set_ylabel('Reconstructed', fontsize=12)
+    axes[1].set_title(
+        f'Validation Set\n'
+        f'MAE={mae:.4f} | RMSE={rmse:.4f} | R²={r2:.4f}',
+        fontsize=11
+    )
+    axes[1].legend()
+    axes[1].grid(True, alpha=0.3)
+    axes[1].set_aspect('equal', adjustable='box')
+    
+    plt.suptitle('Overall Reconstruction: Target vs Reconstructed', fontsize=14, y=1.0)
+    plt.tight_layout()
+    plt.show()
+    
+    # ========================================================================
+    # PER-DIMENSION ANALYSIS
+    # ========================================================================
+    for dim_idx in range(ndims):
+        print("\n" + "="*80)
+        print(f"DIMENSION {dim_idx}: {dim_names[dim_idx]} (Size: {shape[dim_idx]})")
+        print("="*80)
+        
+        # Determine how many indices to analyze (limit for large dimensions)
+        max_indices_to_show = 50
+        indices_to_analyze = min(shape[dim_idx], max_indices_to_show)
+        step = max(1, shape[dim_idx] // indices_to_analyze)
+        
+        # Print statistics for each index
+        print(f"\n{dim_names[dim_idx]} Index Statistics (showing every {step} index):")
+        print("-" * 100)
+        print(f"{'Dataset':<8} {'Index':<8} {'MAE':<12} {'MSE':<12} {'RMSE':<12} {'R²':<12}")
+        print("-" * 100)
+        
+        for dataset_name, target, recon in [
+            ('TRAIN', train_target, train_recon),
+            ('VAL', val_target, val_recon)
+        ]:
+            for idx in range(0, shape[dim_idx], step):
+                # Extract slice for this index along this dimension
+                # Create slice tuple: [:, :, ..., idx, :, ...]
+                slice_tuple = [slice(None)] * ndims
+                slice_tuple[dim_idx] = idx
+                slice_tuple = tuple(slice_tuple)
+                
+                idx_target = target[slice_tuple].flatten()
+                idx_recon = recon[slice_tuple].flatten()
+                
+                mae, mse, rmse, r2 = compute_metrics(idx_target, idx_recon)
+                print(f"{dataset_name:<8} {idx:<8} {mae:<12.6f} {mse:<12.6f} {rmse:<12.6f} {r2:<12.6f}")
+        
+        # Visualize error profile for this dimension
+        if shape[dim_idx] > 1:
+            fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+            
+            # Compute MAE for each index
+            train_mae_profile = []
+            val_mae_profile = []
+            indices_list = list(range(0, shape[dim_idx], max(1, shape[dim_idx] // 50)))
+            
+            for idx in indices_list:
+                slice_tuple = [slice(None)] * ndims
+                slice_tuple[dim_idx] = idx
+                slice_tuple = tuple(slice_tuple)
+                
+                train_mae, _, _, _ = compute_metrics(
+                    train_target[slice_tuple].flatten(),
+                    train_recon[slice_tuple].flatten()
+                )
+                val_mae, _, _, _ = compute_metrics(
+                    val_target[slice_tuple].flatten(),
+                    val_recon[slice_tuple].flatten()
+                )
+                
+                train_mae_profile.append(train_mae)
+                val_mae_profile.append(val_mae)
+            
+            # Plot MAE profile
+            axes[0].plot(indices_list, train_mae_profile, marker='o', label='Train', linewidth=2)
+            axes[0].plot(indices_list, val_mae_profile, marker='s', label='Val', linewidth=2)
+            axes[0].set_xlabel(f'{dim_names[dim_idx]} Index')
+            axes[0].set_ylabel('MAE')
+            axes[0].set_title(f'MAE Profile Along {dim_names[dim_idx]}')
+            axes[0].legend()
+            axes[0].grid(True, alpha=0.3)
+            
+            # Plot R² profile
+            train_r2_profile = []
+            val_r2_profile = []
+            
+            for idx in indices_list:
+                slice_tuple = [slice(None)] * ndims
+                slice_tuple[dim_idx] = idx
+                slice_tuple = tuple(slice_tuple)
+                
+                _, _, _, train_r2 = compute_metrics(
+                    train_target[slice_tuple].flatten(),
+                    train_recon[slice_tuple].flatten()
+                )
+                _, _, _, val_r2 = compute_metrics(
+                    val_target[slice_tuple].flatten(),
+                    val_recon[slice_tuple].flatten()
+                )
+                
+                train_r2_profile.append(train_r2)
+                val_r2_profile.append(val_r2)
+            
+            axes[1].plot(indices_list, train_r2_profile, marker='o', label='Train', linewidth=2)
+            axes[1].plot(indices_list, val_r2_profile, marker='s', label='Val', linewidth=2)
+            axes[1].set_xlabel(f'{dim_names[dim_idx]} Index')
+            axes[1].set_ylabel('R²')
+            axes[1].set_title(f'R² Profile Along {dim_names[dim_idx]}')
+            axes[1].legend()
+            axes[1].grid(True, alpha=0.3)
+            axes[1].axhline(y=0, color='k', linestyle='--', alpha=0.3)
+            
+            plt.suptitle(f'Error Profile: {dim_names[dim_idx]}', fontsize=14)
+            plt.tight_layout()
+            plt.show()
+    
+    # ========================================================================
+    # SAMPLE SCATTER PLOTS FOR SPECIFIC INDICES
+    # ========================================================================
+    print("\n" + "="*80)
+    print("SAMPLE SCATTER PLOTS (First Few Indices Per Dimension)")
+    print("="*80)
+    
+    for dim_idx in range(ndims):
+        if shape[dim_idx] <= 1:
+            continue
+            
+        # Sample a few indices from this dimension
+        n_samples = min(4, shape[dim_idx])
+        sample_indices = np.linspace(0, shape[dim_idx]-1, n_samples, dtype=int)
+        
+        fig, axes = plt.subplots(2, n_samples, figsize=(5*n_samples, 10))
+        if n_samples == 1:
+            axes = axes.reshape(-1, 1)
+        
+        for col_idx, idx in enumerate(sample_indices):
+            # Extract slice
+            slice_tuple = [slice(None)] * ndims
+            slice_tuple[dim_idx] = idx
+            slice_tuple = tuple(slice_tuple)
+            
+            # Train
+            train_idx_target = train_target[slice_tuple].flatten()
+            train_idx_recon = train_recon[slice_tuple].flatten()
+            train_idx_target_sub, train_idx_recon_sub = subsample(
+                train_idx_target, train_idx_recon, max_samples_per_plot
+            )
+            
+            axes[0, col_idx].scatter(train_idx_target_sub, train_idx_recon_sub, 
+                                    alpha=0.3, s=1, color='blue')
+            lim_min = min(train_idx_target_sub.min(), train_idx_recon_sub.min())
+            lim_max = max(train_idx_target_sub.max(), train_idx_recon_sub.max())
+            axes[0, col_idx].plot([lim_min, lim_max], [lim_min, lim_max], 
+                                 'r--', linewidth=2, label='Perfect')
+            
+            mae, _, rmse, r2 = compute_metrics(train_idx_target, train_idx_recon)
+            axes[0, col_idx].set_title(
+                f'Train: {dim_names[dim_idx]}={idx}\n'
+                f'MAE={mae:.3f} | R²={r2:.3f}',
+                fontsize=10
+            )
+            axes[0, col_idx].set_xlabel('Target')
+            axes[0, col_idx].set_ylabel('Reconstructed')
+            axes[0, col_idx].legend(fontsize=8)
+            axes[0, col_idx].grid(True, alpha=0.3)
+            
+            # Val
+            val_idx_target = val_target[slice_tuple].flatten()
+            val_idx_recon = val_recon[slice_tuple].flatten()
+            val_idx_target_sub, val_idx_recon_sub = subsample(
+                val_idx_target, val_idx_recon, max_samples_per_plot
+            )
+            
+            axes[1, col_idx].scatter(val_idx_target_sub, val_idx_recon_sub, 
+                                    alpha=0.3, s=1, color='green')
+            lim_min = min(val_idx_target_sub.min(), val_idx_recon_sub.min())
+            lim_max = max(val_idx_target_sub.max(), val_idx_recon_sub.max())
+            axes[1, col_idx].plot([lim_min, lim_max], [lim_min, lim_max], 
+                                 'r--', linewidth=2, label='Perfect')
+            
+            mae, _, rmse, r2 = compute_metrics(val_idx_target, val_idx_recon)
+            axes[1, col_idx].set_title(
+                f'Val: {dim_names[dim_idx]}={idx}\n'
+                f'MAE={mae:.3f} | R²={r2:.3f}',
+                fontsize=10
+            )
+            axes[1, col_idx].set_xlabel('Target')
+            axes[1, col_idx].set_ylabel('Reconstructed')
+            axes[1, col_idx].legend(fontsize=8)
+            axes[1, col_idx].grid(True, alpha=0.3)
+        
+        plt.suptitle(f'Scatter Plots: {dim_names[dim_idx]} Dimension', fontsize=14)
+        plt.tight_layout()
+        plt.show()
+    
+    # ========================================================================
+    # SUMMARY
+    # ========================================================================
+    print("\n" + "="*80)
+    print("OVERALL SUMMARY")
+    print("="*80)
+    
+    for dataset_name, target, recon in [
+        ('TRAIN', train_target, train_recon),
+        ('VAL', val_target, val_recon)
+    ]:
+        mae, mse, rmse, r2 = compute_metrics(target.flatten(), recon.flatten())
+        
+        print(f"\n{dataset_name} SET:")
+        print(f"  Shape:        {target.shape}")
+        print(f"  Total points: {target.size:,}")
+        print(f"  MAE:          {mae:.6f}")
+        print(f"  MSE:          {mse:.6f}")
+        print(f"  RMSE:         {rmse:.6f}")
+        print(f"  R²:           {r2:.6f}")
+        print(f"  Target range: [{target.min():.4f}, {target.max():.4f}]")
+        print(f"  Recon range:  [{recon.min():.4f}, {recon.max():.4f}]")
+    
+    print("="*80 + "\n")
+
+

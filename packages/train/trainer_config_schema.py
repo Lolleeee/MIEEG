@@ -5,7 +5,7 @@ from torch import nn, optim, cuda
 from torch import device as torchdevice
 from typing import Optional, Literal, List, Any, Set, Union
 from packages.train.metrics import TorchMetric, RMSE, MSE, MAE, AxisCorrelation
-from packages.train.loss import TorchLoss, TorchMSELoss, TorchL1Loss, SequenceVQVAELoss, VQAE23Loss, CWTMSE, MSEPlusLoss
+from packages.train.loss import TorchLoss, TorchMSELoss, TorchL1Loss, VQAE23Loss, CWTMSE, MSEPlusLoss
 from packages.models.vqae_skip import SequenceVQAE as SequenceVQAE_Skip
 from packages.models.vqae import VQVAE
 from packages.models.vqae_light_ts import VQAELight as VQAE23_LTS
@@ -44,7 +44,6 @@ class OptimizerType(str, Enum):
 class LossType(str, Enum):
     MSE = "mse"
     L1 = "l1"
-    SEQVQVAELOSS = "seq_vqvae_loss"
     VQAE23LOSS = "vqae23_loss"
     INMODELMSE = "inmodel_mse"
     MSEPLUS = "mse_plus"
@@ -96,7 +95,6 @@ OPTIMIZER_MAP = {
 LOSS_MAP = {
     LossType.MSE: TorchMSELoss,
     LossType.L1: TorchL1Loss,
-    LossType.SEQVQVAELOSS: SequenceVQVAELoss,
     LossType.VQAE23LOSS: VQAE23Loss,
     LossType.INMODELMSE: CWTMSE,
     LossType.MSEPLUS: MSEPlusLoss,
