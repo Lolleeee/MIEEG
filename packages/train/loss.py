@@ -24,7 +24,7 @@ class TorchMSELoss(TorchLoss):
     def _compute_loss(self, outputs: Dict, inputs: Dict) -> Dict:
         rec_cwt = outputs["reconstruction"]   # (B,2,F,7,5,T)
         tgt_cwt = outputs["target"]           # (B,2,F,7,5,T)
-        print(rec_cwt.std().item(), tgt_cwt.std().item())
+        
         # MSE per freq band
         diff2 = (rec_cwt - tgt_cwt).pow(2).mean(dim=(0,1,3,4,5))          # (F,)
         # Target power per band
