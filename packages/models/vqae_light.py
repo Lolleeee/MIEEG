@@ -318,22 +318,25 @@ class Decoder3D(nn.Module):
 
 
 class Decoder2D(nn.Module):
-    """2D upsampling back to CWT layout (B, 2, F, 7, 5, T) with PixelShuffle-style upsampling."""
-    def __init__(self, config: VQAELightConfig, c2d_out: int):
+    """Resize-conv upsampling back to (B, 2, F, 7, 5, T)."""
+    def __init__(self, config: VQAELightConfig, c2d_in: int):
         super().__init__()
-        self.config = config
         use_gn = config.use_group_norm
         g = config.num_groups
-        C_in = c2d_out
+
+        C = c2d_in
         layers = []
 
-        chans = list(reversed(config.encoder_2d_channels))
-        for i, outc in enumerate(chans):
-            layers.append(UpPixelShuffle2D(C_in, outc, use_bn=use_gn, groups_gn=g))
-            C_in = outc
+        # Mirror each stride=(1,2) in Encoder2D
+        for outc in reversed(config.encoder_2d_channels):
+            layers.append(nn.Upsample(scale_factor=(1,2), mode="bilinear", align_corners=False))
+            layers.append(DWConv2dPW(C, outc, k=3, s=1, p=1, use_bn=use_gn, groups_gn=g))
+            C = outc
 
-        layers.append(nn.Conv2d(C_in, config.num_input_channels * config.num_freq_bands, 1, bias=True))
+        # Final projection to 2*F
+        layers.append(nn.Conv2d(C, config.num_input_channels * config.num_freq_bands, 1, bias=True))
         self.net = nn.Sequential(*layers)
+        self.config = config
 
     def forward(self, x2d):
         x = self.net(x2d)  # (B, 2F, 7, 5*T)
@@ -342,9 +345,7 @@ class Decoder2D(nn.Module):
         F = self.config.num_freq_bands
         W = self.config.spatial_cols
         T = WT // W
-        x = x.view(B, two, F, H, W, T)
-        return x
-
+        return x.view(B, two, F, H, W, T)
 
 # -----------------------
 # VQAE (CWT-space)
@@ -386,7 +387,7 @@ class VQAELight(nn.Module):
             enc3_shape=(self.config.spatial_rows, self.config.spatial_cols, self.enc2d.t_out),
             c3_out=self.enc3d.c3_out
         )
-        self.dec2d = Decoder2D(config, c2d_out=self.enc3d.c3_out)
+        self.dec2d = Decoder2D(config, c2d_in=self.enc3d.c3_out)
 
         self.apply(self._init_weights)
 
