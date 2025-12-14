@@ -43,7 +43,7 @@ config = {
             'batch_size': 32,
             'norm_axes': (0, 2),
             'target_norm_axes': (0, 2),
-            'nsamples': 100
+            'nsamples': 5
         }
     },
     'loss': {
@@ -52,7 +52,7 @@ config = {
     },
     'optimizer': {
         'type': OptimizerType.ADAMW,
-        'lr': 0.001,
+        'lr': 0.01,
         'asym_lr': None,
         'weight_decay': 0.0001
     },
@@ -82,7 +82,7 @@ config = {
         'custom_plotter': {
             'plot_function': CustomPlotTypes.SCATTER,
             'plot_function_args': {},
-            'plot_interval': 200
+            'plot_interval': 100
         }
     },
     'info': {
