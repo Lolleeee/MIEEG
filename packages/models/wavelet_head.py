@@ -192,26 +192,35 @@ class CWTHead(nn.Module):
         x = x.reshape(-1, C, self.num_chunks * chunk_T)
         return x
 
-
-
-
 class InverseCWTHead(nn.Module):
     """
-    Maps CWTHead output (B*,2,F,7,5,T) -> time series (B*,32,T).
-
-    Steps:
-      1) grid -> 32 channels
-      2) invert CWTHead normalization (ri_shift/ri_scale)
-      3) grouped ConvTranspose1d initialized from CWTHead.conv.weight
-      4) optional light refinement
+    Improved inverse head:
+      - Positive per-frequency gain via exp(log_gain)
+      - Optional mean-normalization of gains
+      - Grouped ConvTranspose1d initialized from analysis weights
+      - Optional depthwise+pointwise refinement in time domain
     """
-    def __init__(self, cwt_head, train_synthesis: bool = True, refine: bool = True, refine_kernel: int = 9):
+    def __init__(
+        self,
+        cwt_head,
+        train_synthesis: bool = True,
+        refine: bool = True,
+        refine_kernel: int = 65,          # bigger default
+        normalize_gain_mean: bool = True, # keep mean gain ~1
+        gain_min: float = 1e-4,           # avoid vanishing gains
+    ):
         super().__init__()
         self.cwt_head = cwt_head
         self.F = cwt_head.num_freqs
         self.C = cwt_head.num_channels
         self.K = cwt_head.conv.kernel_size[0]
         self.padding = cwt_head.conv.padding[0]
+
+        self.normalize_gain_mean = normalize_gain_mean
+        self.gain_min = float(gain_min)
+
+        # log-gains initialized to 0 => gain = 1
+        self.freq_gain_log = nn.Parameter(torch.zeros(self.F))
 
         # Synthesis filterbank: in_ch = C*(2F), out_ch = C, groups=C
         self.synth = nn.ConvTranspose1d(
@@ -224,14 +233,11 @@ class InverseCWTHead(nn.Module):
             bias=False
         )
 
-        # Initialize from analysis conv weights
-        # Analysis weight shape: (C*(2F), 1, K) — exactly matches ConvTranspose1d expected weight
         with torch.no_grad():
             self.synth.weight.copy_(self.cwt_head.conv.weight)
 
         self.synth.weight.requires_grad = bool(train_synthesis)
 
-        # Optional per-channel refinement (very small)
         self.refine = None
         if refine:
             k = int(refine_kernel)
@@ -243,32 +249,42 @@ class InverseCWTHead(nn.Module):
                 nn.Conv1d(self.C, self.C, kernel_size=1, bias=True),
             )
 
+    def _freq_gain(self):
+        # positive gains
+        g = torch.exp(self.freq_gain_log).clamp_min(self.gain_min)  # (F,)
+        if self.normalize_gain_mean:
+            g = g / (g.mean() + 1e-12)
+        return g
+
     def forward(self, cwt_grid):
         """
-        cwt_grid: (B*,2,F,7,5,T)
-        returns:  (B*,32,T)
+        cwt_grid: (B*,2,F,7,5,T) -> (B*,32,T)
         """
         B, two, Freqs, H, W, T = cwt_grid.shape
         assert two == 2 and Freqs == self.F
 
-        # 1) grid -> (B,2,F,32,T)
-        feat = cwt_grid[:, :, :, self.cwt_head.rows, self.cwt_head.cols, :]  # (B,2,F,32,T)
+        # (B,2,F,32,T)
+        feat = cwt_grid[:, :, :, self.cwt_head.rows, self.cwt_head.cols, :]
 
-        # 2) invert normalization if enabled in CWTHead
+        # invert normalization: y=(x+shift)*scale -> x=y/scale - shift
         if getattr(self.cwt_head, "normalize_outputs", False):
-            scale = self.cwt_head.ri_scale[None, None, :, None, None]  # (1,1,F,1,1)
-            shift = self.cwt_head.ri_shift[None, None, :, None, None]  # (1,1,F,1,1)
+            scale = self.cwt_head.ri_scale[None, None, :, None, None]
+            shift = self.cwt_head.ri_shift[None, None, :, None, None]
             feat = feat / (scale + 1e-12)
             feat = feat - shift
 
-        # 3) pack to (B, C*(2F), T)
+        # per-frequency synthesis weighting
+        g = self._freq_gain()[None, None, :, None, None]  # (1,1,F,1,1)
+        feat = feat * g
+
+        # pack to (B, C*(2F), T)
         feat = feat.permute(0, 3, 1, 2, 4).contiguous()  # (B,32,2,F,T)
         z = feat.view(B, self.C * (2 * self.F), T)
 
-        # 4) synthesize
-        x_hat = self.synth(z)  # (B,32,T)
+        # synthesize
+        x_hat = self.synth(z)
 
-        # 5) refine
+        # refine
         if self.refine is not None:
             x_hat = self.refine(x_hat)
 
