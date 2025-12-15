@@ -12,27 +12,69 @@ from packages.train.F_torch_wrappers import TorchLoss
 logging.basicConfig(level=logging.INFO)
 
 
+
 class TorchMSELoss(TorchLoss):
-    def __init__(self):
-        """MSE Loss with automatic validation"""
-        super().__init__(expected_model_output_keys=['reconstruction'], 
-                         expected_loss_keys=['loss'])
-        
-        self.name = "TorchMSELoss"
-        self.function = nn.MSELoss(reduction='mean')
-        self.eps = 1e-6
+    def __init__(
+        self,
+        embed_key: str = "embeddings",
+        gamma: float = 1.0,          # target std per dim (for z normalized-ish embeddings)
+        w_recon: float = 1.0,
+        w_var: float = 1.0,
+        w_cov: float = 0.01,
+        eps: float = 1e-6
+    ):
+        super().__init__(
+            expected_model_output_keys=["reconstruction", "target", embed_key],
+            expected_loss_keys=["loss", "loss_recon", "loss_var", "loss_cov"]
+        )
+        self.name = "TorchCWTReconPlusEmbedRegLoss"
+        self.embed_key = embed_key
+        self.gamma = gamma
+        self.w_recon = w_recon
+        self.w_var = w_var
+        self.w_cov = w_cov
+        self.eps = eps
+
+    def _recon_loss(self, rec_cwt, tgt_cwt):
+        # Relative MSE per frequency band (your original)
+        diff2 = (rec_cwt - tgt_cwt).pow(2).mean(dim=(0,1,3,4,5))           # (F,)
+        denom = tgt_cwt.pow(2).mean(dim=(0,1,3,4,5)).clamp_min(self.eps)   # (F,)
+        return (diff2 / denom).mean()
+
+    def _var_loss(self, z):
+        # z: (B, D). If z is (B, chunks, D) flatten it outside before calling.
+        z = z - z.mean(dim=0, keepdim=True)
+        std = torch.sqrt(z.var(dim=0, unbiased=False) + self.eps)          # (D,)
+        return torch.mean(F.relu(self.gamma - std))
+
+    def _cov_loss(self, z):
+        # Penalize off-diagonal covariance (VICReg-style)
+        B, D = z.shape
+        z = z - z.mean(dim=0, keepdim=True)
+        cov = (z.T @ z) / (B - 1 + self.eps)                               # (D,D)
+        off_diag = cov - torch.diag(torch.diag(cov))
+        return (off_diag.pow(2).sum()) / D
+
     def _compute_loss(self, outputs: Dict, inputs: Dict) -> Dict:
-        rec_cwt = outputs["reconstruction"]   # (B,2,F,7,5,T)
-        tgt_cwt = outputs["target"]           # (B,2,F,7,5,T)
-        
-        # MSE per freq band
-        diff2 = (rec_cwt - tgt_cwt).pow(2).mean(dim=(0,1,3,4,5))          # (F,)
-        # Target power per band
-        denom = tgt_cwt.pow(2).mean(dim=(0,1,3,4,5)).clamp_min(self.eps)  # (F,)
+        rec_cwt = outputs["reconstruction"]
+        tgt_cwt = outputs["target"]
 
-        loss = (diff2 / denom).mean()
+        z = outputs[self.embed_key]
+        # Handle chunked embeddings like (B*chunks, D) or (B, chunks, D)
+        if z.dim() == 3:
+            z = z.reshape(-1, z.shape[-1])
 
-        return {'loss': loss}
+        loss_recon = self._recon_loss(rec_cwt, tgt_cwt)
+        loss_var = self._var_loss(z)
+        loss_cov = self._cov_loss(z) if self.w_cov > 0 else z.new_tensor(0.0)
+
+        loss = self.w_recon * loss_recon + self.w_var * loss_var + self.w_cov * loss_cov
+        return {
+            "loss": loss,
+            "loss_recon": loss_recon.detach(),
+            "loss_var": loss_var.detach(),
+            "loss_cov": loss_cov.detach(),
+        }
 
 class TorchL1Loss(TorchLoss):
     """SmoothL1 (Huber-like) loss with optional embedding regularization."""

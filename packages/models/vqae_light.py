@@ -146,6 +146,11 @@ class VQAELightConfig:
     ema_decay: float = 0.99
     epsilon: float = 1e-5
 
+    # Latent augmentations
+    latent_dropout_p: float = 0.1
+    latent_noise_std: float = 0.01
+    latent_clip: float = None 
+    
     # Norms
     use_group_norm: bool = True
     num_groups: int = 4
@@ -391,6 +396,9 @@ class VQAELight(nn.Module):
 
         self.apply(self._init_weights)
 
+        self.latent_dropout_p = self.config.latent_dropout_p
+        self.latent_noise_std = self.config.latent_noise_std
+        self.latent_clip = self.config.latent_clip
     def _init_weights(self, m):
         if self.use_cwt and hasattr(self, "cwt_head") and m is getattr(self.cwt_head, "conv", None):
             return
@@ -419,11 +427,24 @@ class VQAELight(nn.Module):
         xhat = self.dec2d(x2d)
         return x2d, xhat
 
+    def _latent_augment(self, z: torch.Tensor) -> torch.Tensor:
+        if not self.training:
+            return z
+        if self.latent_dropout_p and self.latent_dropout_p > 0:
+            z = F.dropout(z, p=self.latent_dropout_p, training=True)
+        if self.latent_noise_std and self.latent_noise_std > 0:
+            z = z + self.latent_noise_std * torch.randn_like(z)
+        if self.latent_clip is not None:
+            z = z.clamp(-self.latent_clip, self.latent_clip)
+        return z
+
     def forward(self, x):
         if not self.use_cwt:
             raise ValueError("Assumes use_cwt=True")
         x_cwt = self.cwt_head(x)
         h3, z, _ = self.encode(x_cwt)
+
+        z = self._latent_augment(z)   # <--- add this
 
         if self.config.use_quantizer:
             z_q, indices, vq_losses = self.vq(z)
@@ -440,7 +461,7 @@ class VQAELight(nn.Module):
         return {
             "reconstruction": recon_cwt,
             "target": x_cwt,
-            "embeddings": z,
+            "embeddings": z,        # note: now this is the augmented z during training
             "quantized": z_q,
             "indices": indices,
             **vq_losses
