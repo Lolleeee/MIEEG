@@ -194,87 +194,105 @@ class CWTHead(nn.Module):
 
 
 
-import torch
-import torch.nn as nn
 
-class WaveletSynthesisHead(nn.Module):
+class InverseCWTHead(nn.Module):
     """
-    Synthesis: (real, imag, freq, grid_h, grid_w, time) -> (channels, time)
+    Maps CWTHead output (B*,2,F,7,5,T) -> time series (B*,32,T).
 
-    Input:  coeffs (B_chunk, 2, F, 7, 5, T)
-    Output: x_hat  (B_chunk, 32, T)
+    Steps:
+      1) grid -> 32 channels
+      2) invert CWTHead normalization (ri_shift/ri_scale)
+      3) grouped ConvTranspose1d initialized from CWTHead.conv.weight
+      4) optional light refinement
     """
-    def __init__(self, cwt_head: "CWTHead", learn_freq_gains: bool = True):
+    def __init__(self, cwt_head, train_synthesis: bool = True, refine: bool = True, refine_kernel: int = 9):
         super().__init__()
         self.cwt_head = cwt_head
-        self.C = cwt_head.num_channels
         self.F = cwt_head.num_freqs
+        self.C = cwt_head.num_channels
+        self.K = cwt_head.conv.kernel_size[0]
+        self.padding = cwt_head.conv.padding[0]
 
-        # Optional scale/frequency weighting (cheap, usually helps)
-        if learn_freq_gains:
-            self.freq_gain = nn.Parameter(torch.ones(self.F, dtype=torch.float32))
-        else:
-            self.register_buffer("freq_gain", torch.ones(self.F, dtype=torch.float32))
-
-        # Learnable synthesis filterbank (grouped by EEG channel)
-        # Not a true inverse in general, but a strong learnable decoder. [web:84]
+        # Synthesis filterbank: in_ch = C*(2F), out_ch = C, groups=C
         self.synth = nn.ConvTranspose1d(
             in_channels=self.C * (2 * self.F),
             out_channels=self.C,
-            kernel_size=cwt_head.conv.kernel_size[0],
-            padding=cwt_head.conv.padding[0],
+            kernel_size=self.K,
+            stride=1,
+            padding=self.padding,
             groups=self.C,
-            bias=False,
+            bias=False
         )
 
-        # Good init: start from analysis kernels (adjoint-like init)
-        self.synth.weight.data = cwt_head.conv.weight.data.clone()
+        # Initialize from analysis conv weights
+        # Analysis weight shape: (C*(2F), 1, K) — exactly matches ConvTranspose1d expected weight
+        with torch.no_grad():
+            self.synth.weight.copy_(self.cwt_head.conv.weight)
 
-    def forward(self, coeffs):
+        self.synth.weight.requires_grad = bool(train_synthesis)
+
+        # Optional per-channel refinement (very small)
+        self.refine = None
+        if refine:
+            k = int(refine_kernel)
+            if k % 2 == 0:
+                k += 1
+            self.refine = nn.Sequential(
+                nn.Conv1d(self.C, self.C, kernel_size=k, padding=k // 2, groups=self.C, bias=False),
+                nn.SiLU(inplace=True),
+                nn.Conv1d(self.C, self.C, kernel_size=1, bias=True),
+            )
+
+    def forward(self, cwt_grid):
         """
-        coeffs: (B_chunk, 2, F, 7, 5, T)
+        cwt_grid: (B*,2,F,7,5,T)
+        returns:  (B*,32,T)
         """
-        Bc, two, F, H, W, T = coeffs.shape
-        assert two == 2 and F == self.F
+        B, two, Freqs, H, W, T = cwt_grid.shape
+        assert two == 2 and Freqs == self.F
 
-        # Grid -> 32 channels: (B_chunk, 2, F, 32, T)
-        feat = coeffs[:, :, :, self.cwt_head.rows, self.cwt_head.cols, :]
+        # 1) grid -> (B,2,F,32,T)
+        feat = cwt_grid[:, :, :, self.cwt_head.rows, self.cwt_head.cols, :]  # (B,2,F,32,T)
 
-        # Undo CWTHead's real/imag normalization if enabled (so synth sees "raw-ish" coeffs)
-        # Your CWTHead does: (x + shift) * scale, so invert: x = x/scale - shift
+        # 2) invert normalization if enabled in CWTHead
         if getattr(self.cwt_head, "normalize_outputs", False):
             scale = self.cwt_head.ri_scale[None, None, :, None, None]  # (1,1,F,1,1)
             shift = self.cwt_head.ri_shift[None, None, :, None, None]  # (1,1,F,1,1)
             feat = feat / (scale + 1e-12)
             feat = feat - shift
 
-        # Apply frequency gains to both real and imag
-        feat = feat * self.freq_gain[None, None, :, None, None]
+        # 3) pack to (B, C*(2F), T)
+        feat = feat.permute(0, 3, 1, 2, 4).contiguous()  # (B,32,2,F,T)
+        z = feat.view(B, self.C * (2 * self.F), T)
 
-        # Pack into grouped ConvTranspose1d format:
-        # (B_chunk, 2, F, 32, T) -> (B_chunk, 32, 2*F, T) -> (B_chunk, 32*(2F), T)
-        feat = feat.permute(0, 3, 1, 2, 4).contiguous()          # (B_chunk, 32, 2, F, T)
-        feat = feat.view(Bc, self.C, 2 * self.F, T)              # (B_chunk, 32, 2F, T)
-        z = feat.reshape(Bc, self.C * (2 * self.F), T)           # (B_chunk, 32*(2F), T)
+        # 4) synthesize
+        x_hat = self.synth(z)  # (B,32,T)
 
-        x_hat = self.synth(z)                                    # (B_chunk, 32, T)
+        # 5) refine
+        if self.refine is not None:
+            x_hat = self.refine(x_hat)
+
         return x_hat
 
 if __name__ == "__main__":
-    # Print model parameters
-    synth = WaveletSynthesisHead(
+
+    InverseCWTHead_test = InverseCWTHead(
         cwt_head=CWTHead(
-            frequencies=[4, 8, 12, 16, 20, 24, 28, 32, 36, 40],
+            frequencies=np.linspace(1, 50, 30),
             fs=250,
             num_channels=32,
             n_cycles=6.0,
             trainable=False,
-            chunk_samples=250,
-            use_log_compression=True,
+            chunk_samples=None,
             normalize_outputs=True,
             learnable_norm=True
         ),
-        learn_freq_gains=True
+        train_synthesis=True,
+        refine=True,
+        refine_kernel=9
     )
-    total_params = sum(p.numel() for p in synth.parameters() if p.requires_grad)
-    print(f"Total trainable parameters in WaveletSynthesisHead: {total_params}")
+    x = torch.randn(2, 32, 1000)
+    cwt_out = InverseCWTHead_test.cwt_head(x)
+    x_rec = InverseCWTHead_test(cwt_out)
+    print(x_rec.shape)  # Expected: (2, 32, 1000
+    
