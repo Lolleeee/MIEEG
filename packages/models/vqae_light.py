@@ -150,7 +150,7 @@ class VQAELightConfig:
     latent_dropout_p: float = 0.1
     latent_noise_std: float = 0.01
     latent_clip: float = None 
-    
+
     # Norms
     use_group_norm: bool = True
     num_groups: int = 4
@@ -444,7 +444,7 @@ class VQAELight(nn.Module):
         x_cwt = self.cwt_head(x)
         h3, z, _ = self.encode(x_cwt)
 
-        z = self._latent_augment(z)   # <--- add this
+        z = self._latent_augment(z)
 
         if self.config.use_quantizer:
             z_q, indices, vq_losses = self.vq(z)
@@ -461,7 +461,7 @@ class VQAELight(nn.Module):
         return {
             "reconstruction": recon_cwt,
             "target": x_cwt,
-            "embeddings": z,        # note: now this is the augmented z during training
+            "embeddings": z,    
             "quantized": z_q,
             "indices": indices,
             **vq_losses
